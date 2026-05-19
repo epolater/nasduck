@@ -3,10 +3,13 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
 // Background actions only available in standalone builds (not Expo Go)
+// executionEnvironment: 'storeClient' = Expo Go, 'standalone' or 'bare' = real build
 let BackgroundActions: any = null;
-const isExpoGo = Constants.appOwnership === 'expo';
-if (!isExpoGo) {
-  try { BackgroundActions = require('react-native-background-actions').default; } catch (_) {}
+const isExpoGo = Constants.executionEnvironment === 'storeClient';
+if (Platform.OS === 'android' && !isExpoGo) {
+  try { BackgroundActions = require('react-native-background-actions').default; } catch (e) {
+    console.warn('react-native-background-actions not available:', e);
+  }
 }
 import { CRITERIA_WEIGHTS, RATE_LIMIT_MS, UNIVERSE_MIN_PRICE, UNIVERSE_MIN_VOLUME } from '../constants';
 import { delay, fetchCandles, fetchMarketCap, fetchNasdaqSymbols, fetchQuote, getApiKey } from '../services/finnhub';
@@ -95,21 +98,26 @@ export async function runDailyScan(): Promise<void> {
 
   // On Android standalone builds use a foreground service so scan keeps running when minimized
   if (Platform.OS === 'android' && BackgroundActions) {
+    try {
+      // Stop any previous instance first
+      if (BackgroundActions.isRunning()) await BackgroundActions.stop();
+    } catch (_) {}
+
     const options = {
       taskName: 'NasduckScan',
       taskTitle: '📊 Nasduck — Scanning stocks',
-      taskDesc: 'Scanning NASDAQ for signals…',
+      taskDesc: 'Starting scan…',
       taskIcon: { name: 'ic_launcher', type: 'mipmap' },
       color: '#00d4aa',
-      parameters: {},
+      linkingURI: 'nasduck://',
+      parameters: { dummy: true },
     };
     try {
       await BackgroundActions.start(_runDailyScanCore, options);
-    } catch (_) {
-      // Fallback: run without foreground service
-      await _runDailyScanCore({});
+      return;
+    } catch (e) {
+      console.warn('Foreground service failed, running in foreground:', e);
     }
-    return;
   }
 
   await _runDailyScanCore({});
