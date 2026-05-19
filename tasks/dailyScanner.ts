@@ -1,16 +1,5 @@
 import * as Notifications from 'expo-notifications';
-import Constants from 'expo-constants';
-import { Platform } from 'react-native';
-
-// Background actions only available in standalone builds (not Expo Go)
-// executionEnvironment: 'storeClient' = Expo Go, 'standalone' or 'bare' = real build
-let BackgroundActions: any = null;
-const isExpoGo = Constants.executionEnvironment === 'storeClient';
-if (Platform.OS === 'android' && !isExpoGo) {
-  try { BackgroundActions = require('react-native-background-actions').default; } catch (e) {
-    console.warn('react-native-background-actions not available:', e);
-  }
-}
+import * as KeepAwake from 'expo-keep-awake';
 import { CRITERIA_WEIGHTS, RATE_LIMIT_MS, UNIVERSE_MIN_PRICE, UNIVERSE_MIN_VOLUME } from '../constants';
 import { delay, fetchCandles, fetchMarketCap, fetchNasdaqSymbols, fetchQuote, getApiKey } from '../services/finnhub';
 import { useCriteriaStore } from '../store/criteriaStore';
@@ -26,9 +15,6 @@ let universeBuildAbortFlag = false;
 
 export function abortScan() {
   scanAbortFlag = true;
-  if (Platform.OS === 'android' && BackgroundActions) {
-    BackgroundActions.stop().catch(() => {});
-  }
 }
 
 export async function restartScan() {
@@ -95,35 +81,15 @@ export async function buildUniverse(): Promise<boolean> {
 
 export async function runDailyScan(): Promise<void> {
   if (!getApiKey()) return;
-
-  // On Android standalone builds use a foreground service so scan keeps running when minimized
-  if (Platform.OS === 'android' && BackgroundActions) {
-    try {
-      // Stop any previous instance first
-      if (BackgroundActions.isRunning()) await BackgroundActions.stop();
-    } catch (_) {}
-
-    const options = {
-      taskName: 'NasduckScan',
-      taskTitle: '📊 Nasduck — Scanning stocks',
-      taskDesc: 'Starting scan…',
-      taskIcon: { name: 'ic_launcher', type: 'mipmap' },
-      color: '#00d4aa',
-      linkingURI: 'nasduck://',
-      parameters: { dummy: true },
-    };
-    try {
-      await BackgroundActions.start(_runDailyScanCore, options);
-      return;
-    } catch (e) {
-      console.warn('Foreground service failed, running in foreground:', e);
-    }
+  KeepAwake.activateKeepAwakeAsync('nasduck-scan');
+  try {
+    await _runDailyScanCore();
+  } finally {
+    KeepAwake.deactivateKeepAwake('nasduck-scan');
   }
-
-  await _runDailyScanCore({});
 }
 
-async function _runDailyScanCore(_: object): Promise<void> {
+async function _runDailyScanCore(): Promise<void> {
 
   scanAbortFlag = false;
 
@@ -298,11 +264,6 @@ async function _runDailyScanCore(_: object): Promise<void> {
 
   const { signals } = useSignalsStore.getState();
   if (signals.length > 0) await sendScanNotification(signals);
-
-  // Stop foreground service now that scan is complete
-  if (Platform.OS === 'android' && BackgroundActions) {
-    try { await BackgroundActions.stop(); } catch (_) {}
-  }
 }
 
 async function sendScanNotification(signals: Signal[]) {
