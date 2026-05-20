@@ -1,5 +1,11 @@
 import * as Notifications from 'expo-notifications';
-import * as KeepAwake from 'expo-keep-awake';
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
+
+let BackgroundService: any = null;
+if (Platform.OS === 'android' && Constants.executionEnvironment !== 'storeClient') {
+  try { BackgroundService = require('react-native-background-actions').default; } catch (_) {}
+}
 import { CRITERIA_WEIGHTS, RATE_LIMIT_MS, UNIVERSE_MIN_PRICE, UNIVERSE_MIN_VOLUME } from '../constants';
 import { delay, fetchCandles, fetchMarketCap, fetchNasdaqSymbols, fetchQuote, getApiKey } from '../services/finnhub';
 import { useCriteriaStore } from '../store/criteriaStore';
@@ -15,6 +21,9 @@ let universeBuildAbortFlag = false;
 
 export function abortScan() {
   scanAbortFlag = true;
+  if (Platform.OS === 'android' && BackgroundService?.isRunning()) {
+    BackgroundService.stop().catch(() => {});
+  }
 }
 
 export async function restartScan() {
@@ -81,11 +90,34 @@ export async function buildUniverse(): Promise<boolean> {
 
 export async function runDailyScan(): Promise<void> {
   if (!getApiKey()) return;
-  KeepAwake.activateKeepAwakeAsync('nasduck-scan');
-  try {
-    await _runDailyScanCore();
-  } finally {
-    KeepAwake.deactivateKeepAwake('nasduck-scan');
+
+  if (Platform.OS === 'android' && BackgroundService) {
+    try {
+      if (BackgroundService.isRunning()) await BackgroundService.stop();
+      await BackgroundService.start(
+        async () => { await _runDailyScanCore(); },
+        {
+          taskName: 'NasduckScan',
+          taskTitle: '📊 Nasduck — Scanning',
+          taskDesc: 'Scanning NASDAQ for signals…',
+          taskIcon: { name: 'ic_launcher', type: 'mipmap' },
+          color: '#00d4aa',
+          linkingURI: 'nasduck://',
+          parameters: {},
+        }
+      );
+      return;
+    } catch (e) {
+      console.warn('Background service failed, running normally:', e);
+    }
+  }
+
+  await _runDailyScanCore();
+}
+
+export async function stopBackgroundService() {
+  if (Platform.OS === 'android' && BackgroundService?.isRunning()) {
+    try { await BackgroundService.stop(); } catch (_) {}
   }
 }
 
@@ -264,6 +296,10 @@ async function _runDailyScanCore(): Promise<void> {
 
   const { signals } = useSignalsStore.getState();
   if (signals.length > 0) await sendScanNotification(signals);
+
+  if (Platform.OS === 'android' && BackgroundService?.isRunning()) {
+    try { await BackgroundService.stop(); } catch (_) {}
+  }
 }
 
 async function sendScanNotification(signals: Signal[]) {
