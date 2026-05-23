@@ -89,10 +89,10 @@ export default function ScanScreen() {
     await save({ scanHour: hour, scanMinute: minute });
     if (serverRegistered) {
       registerWithServer().catch(() => {});
-      // Reschedule the silent wakeup notification to the new time
+      // Reschedule the background wakeup notification to the new time
       await Notifications.cancelAllScheduledNotificationsAsync();
       await Notifications.scheduleNotificationAsync({
-        content: { title: '', body: '', data: { type: 'server_wakeup' } },
+        content: { title: 'Nasduck', body: 'Starting scan…', data: { type: 'server_wakeup' } },
         trigger: {
           type: Notifications.SchedulableTriggerInputTypes.DAILY,
           hour,
