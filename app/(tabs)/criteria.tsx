@@ -1,6 +1,8 @@
 import { useRef, useState } from 'react';
 import {
+  Modal,
   PanResponder,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -14,7 +16,7 @@ import { CriteriaId, ScreenerCriteria } from '../../types';
 
 export default function CriteriaScreen() {
   const { criteria, matchMode, setMatchMode, toggleCriteria, setThreshold, setThreshold2, reorderCriteria } = useCriteriaStore();
-  const { minScore, save: saveSettings } = useSettingsStore();
+  const { minScore, minMarketCap, save: saveSettings } = useSettingsStore();
   const scrollRef = useRef<ScrollView>(null);
   const [editMode, setEditMode] = useState(false);
 
@@ -92,6 +94,25 @@ export default function CriteriaScreen() {
           </TouchableOpacity>
           <Text style={styles.stepperValue}>{minScore}</Text>
           <TouchableOpacity style={styles.stepperBtn} onPress={() => saveSettings({ minScore: minScore + 1 })}>
+            <Text style={styles.stepperBtnText}>+</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Min Market Cap */}
+      <View style={styles.minScoreCard}>
+        <View style={styles.minScoreLeft}>
+          <Text style={styles.minScoreTitle}>Minimum Market Cap</Text>
+          <Text style={styles.minScoreDesc}>
+            {minMarketCap === 0 ? 'No filter — all stocks included' : `Skip stocks below $${minMarketCap}B market cap`}
+          </Text>
+        </View>
+        <View style={styles.stepper}>
+          <TouchableOpacity style={styles.stepperBtn} onPress={() => saveSettings({ minMarketCap: Math.max(0, parseFloat((minMarketCap - 0.1).toFixed(1))) })}>
+            <Text style={styles.stepperBtnText}>−</Text>
+          </TouchableOpacity>
+          <Text style={styles.stepperValue}>{minMarketCap === 0 ? 'Off' : `$${minMarketCap}B`}</Text>
+          <TouchableOpacity style={styles.stepperBtn} onPress={() => saveSettings({ minMarketCap: parseFloat((minMarketCap + 0.1).toFixed(1)) })}>
             <Text style={styles.stepperBtnText}>+</Text>
           </TouchableOpacity>
         </View>
@@ -182,10 +203,14 @@ function DraggableSection({
     return list.length - 1;
   }
 
-  function handleDragStart(id: CriteriaId) {
+  function refreshSectionPageY() {
     sectionRef.current?.measure((_x, _y, _w, _h, _px, py) => {
       sectionPageY.current = py;
     });
+  }
+
+  function handleDragStart(id: CriteriaId) {
+    // sectionPageY is already kept fresh via onLayout; no need to re-measure here
     const startIdx = orderedItemsRef.current.findIndex((i) => i.id === id);
     hoverIndexRef.current = startIdx;
     setDraggingId(id);
@@ -217,7 +242,7 @@ function DraggableSection({
   }
 
   return (
-    <View ref={sectionRef}>
+    <View ref={sectionRef} onLayout={refreshSectionPageY}>
       {orderedItems.map((item, index) => (
         <DraggableItem
           key={item.id}
@@ -330,15 +355,55 @@ function CriteriaCard({
 }) {
   const isBuy = criteria.signal === 'buy';
   const accentColor = isBuy ? COLORS.buy : COLORS.sell;
+  const isOptions = ['put_call_ratio_low','put_call_ratio_high','high_iv','near_max_pain'].includes(criteria.id);
+  const [infoVisible, setInfoVisible] = useState(false);
 
   return (
     <View style={[styles.card, criteria.enabled && { borderColor: accentColor + '55' }]}>
       <View style={[styles.accent, { backgroundColor: accentColor }]} />
       <View style={styles.cardBody}>
+
+        {/* Info modal */}
+        <Modal visible={infoVisible} transparent animationType="fade" onRequestClose={() => setInfoVisible(false)}>
+          <Pressable style={styles.modalOverlay} onPress={() => setInfoVisible(false)}>
+            <Pressable style={styles.modalCard} onPress={() => {}}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>{criteria.name}</Text>
+                {isOptions && <Text style={styles.modalOptionsBadge}>⬡ Options</Text>}
+              </View>
+              <Text style={styles.modalDesc}>{criteria.description}</Text>
+              <View style={styles.modalDivider} />
+              <View style={styles.modalSetting}>
+                <Text style={styles.modalSettingLabel}>{criteria.thresholdLabel}</Text>
+                <Text style={styles.modalSettingRange}>
+                  {criteria.thresholdMin}{criteria.thresholdSuffix ?? ''} – {criteria.thresholdMax}{criteria.thresholdSuffix ?? ''}
+                </Text>
+              </View>
+              {criteria.threshold2 != null && (
+                <View style={[styles.modalSetting, { marginTop: 8 }]}>
+                  <Text style={styles.modalSettingLabel}>{criteria.threshold2Label}</Text>
+                  <Text style={styles.modalSettingRange}>
+                    {criteria.threshold2Min ?? 1}{criteria.threshold2Suffix ?? ''} – {criteria.threshold2Max ?? 100}{criteria.threshold2Suffix ?? ''}
+                  </Text>
+                </View>
+              )}
+              <TouchableOpacity style={styles.modalClose} onPress={() => setInfoVisible(false)}>
+                <Text style={styles.modalCloseText}>Close</Text>
+              </TouchableOpacity>
+            </Pressable>
+          </Pressable>
+        </Modal>
+
         <View style={styles.cardTop}>
           <View style={styles.cardTitles}>
-            <Text style={styles.cardName}>{criteria.name}</Text>
-            {!editMode && <Text style={styles.cardDesc}>{criteria.description}</Text>}
+            <View style={styles.cardNameRow}>
+              <Text style={styles.cardName}>{criteria.name}</Text>
+              {!editMode && (
+                <TouchableOpacity onPress={() => setInfoVisible(true)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Text style={styles.infoBtn}>ⓘ</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
           {!editMode && (
             <TouchableOpacity
@@ -389,6 +454,8 @@ function CriteriaCard({
             )}
           </View>
         )}
+
+        {isOptions && <Text style={styles.optionsBadge}>⬡</Text>}
       </View>
     </View>
   );
@@ -463,8 +530,37 @@ const styles = StyleSheet.create({
   cardBody: { flex: 1, padding: 14 },
   cardTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   cardTitles: { flex: 1 },
+  cardNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   cardName: { color: COLORS.text, fontWeight: '700', fontSize: 14 },
-  cardDesc: { color: COLORS.textSecondary, fontSize: 12, marginTop: 3, lineHeight: 17 },
+  infoBtn: { color: COLORS.textMuted, fontSize: 15, lineHeight: 18 },
+  optionsBadge: {
+    position: 'absolute', bottom: 8, right: 8,
+    color: '#00d4aa', fontSize: 14,
+  },
+  // Info modal
+  modalOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center', alignItems: 'center', padding: 24,
+  },
+  modalCard: {
+    backgroundColor: COLORS.surface, borderRadius: 16,
+    padding: 20, width: '100%',
+    borderWidth: 1, borderColor: COLORS.border,
+  },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
+  modalTitle: { flex: 1, color: COLORS.text, fontWeight: '700', fontSize: 16 },
+  modalOptionsBadge: { color: '#00d4aa', fontSize: 12, fontWeight: '600' },
+  modalDesc: { color: COLORS.textSecondary, fontSize: 14, lineHeight: 20 },
+  modalDivider: { height: 1, backgroundColor: COLORS.border, marginVertical: 14 },
+  modalSetting: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  modalSettingLabel: { color: COLORS.textSecondary, fontSize: 13, flex: 1 },
+  modalSettingRange: { color: COLORS.primary, fontSize: 13, fontWeight: '600' },
+  modalClose: {
+    marginTop: 18, backgroundColor: COLORS.surfaceAlt,
+    borderRadius: 10, paddingVertical: 10, alignItems: 'center',
+    borderWidth: 1, borderColor: COLORS.border,
+  },
+  modalCloseText: { color: COLORS.text, fontWeight: '700', fontSize: 14 },
   toggle: {
     borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5,
     backgroundColor: COLORS.surfaceAlt, borderWidth: 1, borderColor: COLORS.border,

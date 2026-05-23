@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { AiAnalysisResult } from '../services/ai';
+import { AiAnalysisResult, ChatMessage } from '../services/ai';
 
 interface AiAnalysisEntry {
   result: AiAnalysisResult;
@@ -12,10 +12,17 @@ interface AiAnalysisState {
   set: (symbol: string, result: AiAnalysisResult, modelId: string) => void;
   get: (symbol: string) => AiAnalysisEntry | null;
   clear: (symbol: string) => void;
+
+  // Chat history — in-memory only, resets on app restart
+  chatHistory: Record<string, ChatMessage[]>;
+  getChatHistory: (symbol: string) => ChatMessage[];
+  setChatHistory: (symbol: string, messages: ChatMessage[]) => void;
+  clearChatHistory: (symbol: string) => void;
 }
 
 export const useAiAnalysisStore = create<AiAnalysisState>((set, get) => ({
   cache: {},
+  chatHistory: {},
 
   set: (symbol, result, modelId) =>
     set((s) => ({
@@ -29,5 +36,19 @@ export const useAiAnalysisStore = create<AiAnalysisState>((set, get) => ({
       const next = { ...s.cache };
       delete next[symbol];
       return { cache: next };
+    }),
+
+  getChatHistory: (symbol) => get().chatHistory[symbol] ?? [],
+
+  setChatHistory: (symbol, messages) =>
+    set((s) => ({
+      chatHistory: { ...s.chatHistory, [symbol]: messages },
+    })),
+
+  clearChatHistory: (symbol) =>
+    set((s) => {
+      const next = { ...s.chatHistory };
+      delete next[symbol];
+      return { chatHistory: next };
     }),
 }));

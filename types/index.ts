@@ -29,7 +29,10 @@ export type CriteriaId =
   | 'stoch_oversold'
   | 'stoch_overbought'
   | 'adx_strong'
-  | 'min_market_cap';
+  | 'put_call_ratio_low'
+  | 'put_call_ratio_high'
+  | 'high_iv'
+  | 'near_max_pain';
 
 export interface ScreenerCriteria {
   id: CriteriaId;
@@ -68,6 +71,14 @@ export interface ScanUniverse {
   lastUpdated: number;
 }
 
+export interface OptionsData {
+  pcr: number | null;
+  maxPain: number | null;
+  ivAvg: number | null;
+  ivRank: number | null;
+  expiryDate: string | null;
+}
+
 export interface Signal {
   id: string;
   symbol: string;
@@ -78,6 +89,8 @@ export interface Signal {
   price: number;
   changePercent: number;
   generatedAt: number;
+  marketCap?: number | null;  // in raw dollars, used for dynamic filtering
+  optionsData?: OptionsData;
 }
 
 export interface ScanState {

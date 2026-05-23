@@ -19,6 +19,10 @@ export const COLORS = {
 export const BACKGROUND_FETCH_TASK = 'nasduck-daily-scan';
 export const FINNHUB_BASE_URL = 'https://finnhub.io/api/v1';
 
+// Cloud scan server — deploy nasduck-server once, all users share it
+// Replace with your Railway/Render URL after deploying
+export const CLOUD_SERVER_URL = 'https://nusduck-server.onrender.com';
+
 // Scan universe filters applied during scanning
 export const UNIVERSE_MIN_PRICE = 5;       // USD
 export const UNIVERSE_MIN_VOLUME = 500000; // shares/day avg
@@ -61,14 +65,17 @@ export const CRITERIA_WEIGHTS: Record<string, number> = {
   adx_strong:              1,
   inside_bar:              1,
   volume_dryup:            1,
-  min_market_cap:          1,
+  put_call_ratio_low:      3,
+  put_call_ratio_high:     3,
+  high_iv:                 2,
+  near_max_pain:           2,
 };
 
 export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'trending_up',
     name: 'Trending Up',
-    description: 'Price closes higher than previous day for N consecutive days',
+    description: 'Flags stocks whose closing price has been higher than the prior day for N consecutive sessions. A simple but reliable sign of sustained buying pressure and short-term price momentum. Longer streaks indicate a stronger, more established uptrend.',
     signal: 'buy',
     enabled: true,
     threshold: 3,
@@ -81,7 +88,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'trending_down',
     name: 'Trending Down',
-    description: 'Price closes lower than previous day for N consecutive days',
+    description: 'Flags portfolio stocks whose closing price has been lower than the prior day for N consecutive sessions, indicating persistent selling pressure. A prolonged downtrend often accelerates, making it a useful early warning to review or exit a position.',
     signal: 'sell',
     enabled: true,
     threshold: 3,
@@ -94,7 +101,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'rsi_oversold',
     name: 'RSI Oversold',
-    description: 'RSI(14) drops below threshold — potential reversal upward',
+    description: 'RSI (Relative Strength Index) is a momentum oscillator that measures the speed and magnitude of recent price changes on a scale of 0 to 100. A reading below 30 indicates the stock is oversold — it has declined sharply in a short period and selling momentum may be exhausted. This level is traditionally associated with potential price reversals or bounces. The threshold setting controls how low RSI must drop before triggering.',
     signal: 'buy',
     enabled: true,
     threshold: 30,
@@ -106,7 +113,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'rsi_overbought',
     name: 'RSI Overbought',
-    description: 'RSI(14) rises above threshold — potential reversal downward',
+    description: 'RSI (Relative Strength Index) above 70 signals the stock is overbought — it has rallied rapidly and buying momentum may be overextended. While a stock can remain overbought during strong trends, this reading increases the probability of a pullback or reversal, making it a useful sell alert for portfolio holdings.',
     signal: 'sell',
     enabled: true,
     threshold: 70,
@@ -118,7 +125,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'above_sma50',
     name: 'Price Crossed Above SMA50',
-    description: 'Today\'s price moved above the 50-day moving average',
+    description: 'SMA (Simple Moving Average) is the plain average of closing prices over a set number of days. A crossover above the SMA signals a shift from weakness to strength — the stock\'s current price is now outpacing its recent average, suggesting improved momentum. The 50-day SMA is one of the most widely watched trendlines by institutional traders.',
     signal: 'buy',
     enabled: false,
     threshold: 50,
@@ -131,7 +138,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'below_sma50',
     name: 'Price Crossed Below SMA50',
-    description: 'Today\'s price moved below the 50-day moving average',
+    description: 'A crossover below the SMA (Simple Moving Average) signals deteriorating momentum — the current price has fallen below the stock\'s recent average, meaning recent sellers are outpacing buyers. This is often an early warning of a deeper downtrend, particularly when it occurs on elevated volume.',
     signal: 'sell',
     enabled: false,
     threshold: 50,
@@ -144,7 +151,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'volume_spike',
     name: 'Volume Spike',
-    description: 'Today\'s volume exceeds N times the 20-day average',
+    description: 'Volume measures the number of shares traded in a session. A volume spike — where today\'s volume significantly exceeds the 20-day average — signals unusual market interest, often driven by earnings, news, or institutional activity. High volume validates a price move; a spike on an up day is a strong bullish confirmation, while a spike on a down day may indicate distribution.',
     signal: 'buy',
     enabled: false,
     threshold: 2,
@@ -157,7 +164,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'new_52w_high',
     name: 'New 52-Week High',
-    description: 'Price hits a new 52-week high today',
+    description: 'Triggers when a stock closes at its highest price over the past year (approximately 252 trading days). New 52-week highs indicate strong price discovery with no overhead resistance — all prior buyers are in profit and there is no selling pressure from investors waiting to break even. Historically, stocks breaking to new annual highs tend to continue outperforming.',
     signal: 'buy',
     enabled: false,
     threshold: 252,
@@ -170,7 +177,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'new_52w_low',
     name: 'New 52-Week Low',
-    description: 'Price hits a new 52-week low today',
+    description: 'Triggers when a stock closes at its lowest price over the past year. A new 52-week low signals that every investor who bought in the last year is sitting at a loss, creating persistent overhead selling pressure as those holders look to exit at breakeven. This is a high-conviction sell signal for portfolio positions.',
     signal: 'sell',
     enabled: false,
     threshold: 252,
@@ -184,7 +191,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'macd_crossover_up',
     name: 'MACD Crossover Up',
-    description: 'MACD line crosses above signal line — momentum turning bullish',
+    description: 'MACD (Moving Average Convergence Divergence) is a momentum indicator calculated as the difference between a 12-day and 26-day EMA. It is plotted alongside a 9-day signal line. A bullish crossover occurs when the MACD line crosses above the signal line, indicating that short-term momentum is accelerating faster than the medium-term trend — a widely-used entry signal. The signal period setting controls the smoothing of the trigger line.',
     signal: 'buy',
     enabled: false,
     threshold: 9,
@@ -197,7 +204,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'macd_crossover_down',
     name: 'MACD Crossover Down',
-    description: 'MACD line crosses below signal line — momentum turning bearish',
+    description: 'MACD (Moving Average Convergence Divergence) crossing below its signal line indicates that short-term momentum is decelerating relative to the medium-term trend. This bearish crossover is one of the most commonly used sell signals in technical analysis and often precedes a sustained price decline, particularly when confirmed by rising volume.',
     signal: 'sell',
     enabled: false,
     threshold: 9,
@@ -211,7 +218,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'ema_crossover_up',
     name: 'EMA Crossover Up',
-    description: 'Short EMA crosses above long EMA — uptrend starting',
+    description: 'EMA (Exponential Moving Average) is a moving average that gives more weight to recent prices, making it more responsive than a simple average. A bullish crossover occurs when a shorter-period EMA crosses above a longer-period EMA — e.g. the 9-day crossing above the 21-day. This indicates that recent price action is strengthening relative to the broader trend, a classic early signal of a new uptrend.',
     signal: 'buy',
     enabled: false,
     threshold: 9,
@@ -230,7 +237,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'ema_crossover_down',
     name: 'EMA Crossover Down',
-    description: 'Short EMA crosses below long EMA — downtrend starting',
+    description: 'A bearish EMA (Exponential Moving Average) crossover occurs when a shorter-period EMA crosses below a longer-period EMA — indicating that recent price momentum has weakened below the broader trend. This is often referred to as a "death cross" on longer timeframes and signals that selling pressure is gaining the upper hand.',
     signal: 'sell',
     enabled: false,
     threshold: 9,
@@ -250,7 +257,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'price_vs_ema_above',
     name: 'Price Above EMA',
-    description: 'Price is at least X% above its EMA — strong uptrend',
+    description: 'Triggers when the current price is trading a set percentage above its EMA (Exponential Moving Average). Rather than just crossing the average, this requires the price to be meaningfully extended above it — confirming a strong, established uptrend. Useful for finding stocks with genuine momentum rather than borderline crossovers.',
     signal: 'buy',
     enabled: false,
     threshold: 2,
@@ -269,7 +276,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'price_vs_ema_below',
     name: 'Price Below EMA',
-    description: 'Price is at least X% below its EMA — strong downtrend',
+    description: 'Triggers when the current price is trading a set percentage below its EMA (Exponential Moving Average). A stock persistently below its moving average signals that sellers are firmly in control. The EMA period setting adjusts whether you\'re tracking short-term or longer-term trend deterioration.',
     signal: 'sell',
     enabled: false,
     threshold: 2,
@@ -289,7 +296,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'bollinger_breakout_up',
     name: 'Bollinger Breakout Up',
-    description: 'Price closes above upper Bollinger Band — strong momentum',
+    description: 'Bollinger Bands are envelope lines plotted above and below a moving average, set at a defined number of standard deviations. They adapt to volatility — widening when the stock is volatile and narrowing when it is calm. A close above the upper band means the price has broken out of its normal range, signaling unusually strong buying momentum. The period setting controls the moving average length; the standard deviation multiplier controls how wide the bands are.',
     signal: 'buy',
     enabled: false,
     threshold: 20,
@@ -308,7 +315,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'bollinger_breakout_down',
     name: 'Bollinger Breakdown',
-    description: 'Price closes below lower Bollinger Band — strong selling pressure',
+    description: 'A close below the lower Bollinger Band means the price has fallen outside its statistically normal range, indicating unusually strong selling pressure. While this can occasionally mark a short-term oversold extreme, during downtrends it often signals accelerating weakness and further decline ahead.',
     signal: 'sell',
     enabled: false,
     threshold: 20,
@@ -328,7 +335,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'atr_spike',
     name: 'ATR Spike',
-    description: 'True range is unusually large — big move / high volatility day',
+    description: 'ATR (Average True Range) measures daily price volatility by calculating the average of each session\'s full range — including any gap from the prior close. An ATR spike means today\'s price swing is significantly larger than the recent norm, indicating a surge in activity. This can precede major breakouts or breakdowns and is useful for identifying stocks entering a high-conviction move.',
     signal: 'buy',
     enabled: false,
     threshold: 2,
@@ -348,7 +355,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'volume_dryup',
     name: 'Volume Dry-Up',
-    description: 'Volume drops to X% of average — consolidation before potential breakout',
+    description: 'A volume dry-up occurs when trading activity drops sharply below the recent average — indicating that both buyers and sellers have temporarily stepped back. This low-activity consolidation often precedes a significant directional move, as the next wave of buying or selling tends to be decisive. Best used in combination with price near a key support or resistance level.',
     signal: 'buy',
     enabled: false,
     threshold: 40,
@@ -362,7 +369,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'obv_trend_up',
     name: 'OBV Trending Up',
-    description: 'On-Balance Volume rising for N consecutive days — buying pressure building',
+    description: 'OBV (On-Balance Volume) is a cumulative indicator that adds volume on up days and subtracts it on down days. It tracks whether volume is flowing into or out of a stock. When OBV rises for several consecutive days, it means more volume is consistently accompanying price gains — a sign that institutional buying is quietly accumulating the stock, often before a larger price move.',
     signal: 'buy',
     enabled: false,
     threshold: 3,
@@ -375,7 +382,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'obv_trend_down',
     name: 'OBV Trending Down',
-    description: 'On-Balance Volume falling for N consecutive days — selling pressure building',
+    description: 'OBV (On-Balance Volume) falling for consecutive days indicates that higher volume is consistently accompanying price declines — a sign of distribution, where larger players are quietly exiting positions. Declining OBV can precede visible price weakness and is often used as an early warning before the chart itself looks obviously bearish.',
     signal: 'sell',
     enabled: false,
     threshold: 3,
@@ -389,7 +396,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'inside_bar',
     name: 'Inside Bar',
-    description: "Today's range is inside yesterday's — consolidation, potential breakout setup",
+    description: "An inside bar forms when today's high and low are both within yesterday's range — meaning the market moved less than the day before. It signals a pause or consolidation after a prior move, where neither buyers nor sellers gained ground. Inside bars are often followed by a sharp directional breakout as the compressed energy is released.",
     signal: 'buy',
     enabled: false,
     threshold: 0,
@@ -403,7 +410,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'gap_up',
     name: 'Gap Up',
-    description: "Today's open is significantly above yesterday's close — strong opening momentum",
+    description: "A gap up occurs when today's opening price is notably higher than yesterday's closing price, leaving a blank space on the chart. This typically results from overnight news, earnings beats, or analyst upgrades. Gap ups signal strong pre-market demand and often indicate institutional conviction in the stock's near-term direction.",
     signal: 'buy',
     enabled: false,
     threshold: 2,
@@ -416,7 +423,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'gap_down',
     name: 'Gap Down',
-    description: "Today's open is significantly below yesterday's close — strong opening sell-off",
+    description: "A gap down occurs when today's opening price is notably lower than yesterday's closing price. This typically follows negative news, earnings misses, or broader market selling. Gap downs signal strong pre-market selling pressure and are a high-priority alert for portfolio stocks that may be entering a sharp decline.",
     signal: 'sell',
     enabled: false,
     threshold: 2,
@@ -430,7 +437,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'stoch_oversold',
     name: 'Stochastic Oversold',
-    description: '%K crosses above %D in oversold zone — potential reversal upward',
+    description: 'The Stochastic Oscillator compares a stock\'s closing price to its price range over a set period, producing two lines: %K (the fast line) and %D (a smoothed signal line), both on a 0–100 scale. When %K crosses above %D while both are in the oversold zone (below 20), it signals that recent selling momentum is fading and a potential reversal upward may be underway. The oversold level and %K period are both adjustable.',
     signal: 'buy',
     enabled: false,
     threshold: 20,
@@ -448,7 +455,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'stoch_overbought',
     name: 'Stochastic Overbought',
-    description: '%K crosses below %D in overbought zone — potential reversal downward',
+    description: 'When the Stochastic %K line crosses below the %D signal line while both are in the overbought zone (above 80), it signals that recent buying momentum is exhausting itself and a potential reversal downward may follow. The overbought level threshold and %K period are both adjustable to suit different sensitivity preferences.',
     signal: 'sell',
     enabled: false,
     threshold: 80,
@@ -467,7 +474,7 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
   {
     id: 'adx_strong',
     name: 'ADX Strong Trend',
-    description: 'ADX above threshold — strong trend in either direction (use with other criteria)',
+    description: 'ADX (Average Directional Index) measures the strength of a trend regardless of its direction — it tells you how strongly a stock is trending, not whether it\'s going up or down. A reading above 25 indicates a strong, established trend; above 40 signals a very strong trend. ADX is best used alongside directional criteria (e.g. Trending Up or MACD) to confirm that a detected move has real momentum behind it.',
     signal: 'buy',
     enabled: false,
     threshold: 25,
@@ -482,25 +489,11 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
     threshold2Step: 1,
     threshold2Suffix: ' days',
   },
-  // ── Min Market Cap ────────────────────────────────────────
-  {
-    id: 'min_market_cap',
-    name: 'Min Market Cap',
-    description: 'Only include stocks with market cap above this threshold (fetched from Finnhub)',
-    signal: 'buy' as const,
-    enabled: false,
-    threshold: 0.3,
-    thresholdLabel: 'Min market cap',
-    thresholdMin: 0.1,
-    thresholdMax: 500,
-    thresholdStep: 0.1,
-    thresholdSuffix: 'B',
-  },
   // ── Price Surge ───────────────────────────────────────────
   {
     id: 'price_surge',
     name: 'Price Surge',
-    description: 'Price increased by at least X% over the last N days',
+    description: 'Triggers when the stock has gained at least a specified percentage over a defined lookback period. Unlike single-day momentum, a price surge measures sustained multi-day appreciation — useful for identifying stocks in the early or mid-stage of a strong move. The minimum gain and period settings let you tune for short explosive moves or longer sustained rallies.',
     signal: 'buy',
     enabled: true,
     threshold: 10,
@@ -515,5 +508,58 @@ export const DEFAULT_CRITERIA: ScreenerCriteria[] = [
     threshold2Max: 60,
     threshold2Step: 1,
     threshold2Suffix: ' days',
+  },
+  // ── Options: Put/Call Ratio ───────────────────────────────
+  {
+    id: 'put_call_ratio_low',
+    name: 'Low Put/Call Ratio',
+    description: 'PCR (Put/Call Ratio) measures the volume of put options traded versus call options. Puts give the right to sell a stock (typically bought as protection or bearish bets); calls give the right to buy (typically bullish bets). A low PCR below 0.7 means significantly more calls than puts are being traded, indicating that options market participants are positioned bullishly. Requires a Tradier API key.',
+    signal: 'buy' as const,
+    enabled: false,
+    threshold: 0.7,
+    thresholdLabel: 'PCR below',
+    thresholdMin: 0.3,
+    thresholdMax: 1.0,
+    thresholdStep: 0.05,
+  },
+  {
+    id: 'put_call_ratio_high',
+    name: 'High Put/Call Ratio',
+    description: 'A high PCR (Put/Call Ratio) above 1.0 means more put options are being traded than calls, indicating that options participants are predominantly hedging or betting on a price decline. A ratio above 1.2–1.5 is considered notably bearish sentiment in the options market. Requires a Tradier API key.',
+    signal: 'sell' as const,
+    enabled: false,
+    threshold: 1.0,
+    thresholdLabel: 'PCR above',
+    thresholdMin: 0.7,
+    thresholdMax: 2.0,
+    thresholdStep: 0.05,
+  },
+  // ── Options: High IV ──────────────────────────────────────
+  {
+    id: 'high_iv',
+    name: 'High Implied Volatility',
+    description: 'IV (Implied Volatility) is derived from options prices and reflects the market\'s expectation of how much a stock will move in the future. IV Rank compares the current IV level to its range over the past year — a rank of 60% means IV is in the top 40% of its yearly range. High IV Rank signals that the options market is pricing in an unusually large move, often ahead of earnings, news events, or during periods of heightened uncertainty. Requires a Tradier API key.',
+    signal: 'buy' as const,
+    enabled: false,
+    threshold: 60,
+    thresholdLabel: 'IV Rank above',
+    thresholdMin: 30,
+    thresholdMax: 95,
+    thresholdStep: 5,
+    thresholdSuffix: '%',
+  },
+  // ── Options: Near Max Pain ────────────────────────────────
+  {
+    id: 'near_max_pain',
+    name: 'Near Max Pain',
+    description: 'Max Pain is the options strike price at which the total value of all outstanding options contracts (puts and calls) would expire worthless — resulting in the maximum financial loss for options buyers. The theory is that market makers, who are short those options, have an incentive to keep the price near this level into expiry. When the stock price is close to max pain, there is a gravitational pull toward that level as expiry approaches. Requires a Tradier API key.',
+    signal: 'buy' as const,
+    enabled: false,
+    threshold: 3,
+    thresholdLabel: 'Within',
+    thresholdMin: 1,
+    thresholdMax: 10,
+    thresholdStep: 0.5,
+    thresholdSuffix: '% of max pain',
   },
 ];

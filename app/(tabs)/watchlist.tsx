@@ -1,9 +1,10 @@
+import { useRef, useState } from 'react';
 import { useRouter } from 'expo-router';
-import { useRef } from 'react';
+import { Stack } from 'expo-router';
 import {
   Animated,
-  FlatList,
   PanResponder,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -11,11 +12,15 @@ import {
 } from 'react-native';
 import { COLORS } from '../../constants';
 import { useWatchlistStore } from '../../store/watchlistStore';
-import { WatchlistStock } from '../../store/watchlistStore';
+import { DraggableList } from '../../components/DraggableList';
+
+const ROW_HEIGHT = 86; // row height + margin
 
 export default function WatchlistScreen() {
   const router = useRouter();
-  const { stocks, remove } = useWatchlistStore();
+  const { stocks, remove, reorder } = useWatchlistStore();
+  const scrollRef = useRef<ScrollView>(null);
+  const [editMode, setEditMode] = useState(false);
 
   if (stocks.length === 0) {
     return (
@@ -30,41 +35,55 @@ export default function WatchlistScreen() {
   }
 
   return (
-    <FlatList
-      style={styles.container}
-      data={stocks}
-      keyExtractor={(item) => item.symbol}
-      contentContainerStyle={styles.content}
-      renderItem={({ item }) => (
-        <SwipeableRow onDelete={() => remove(item.symbol)}>
-          <TouchableOpacity
-            style={styles.row}
-            activeOpacity={0.7}
-            onPress={() => router.push(`/stock/${item.symbol}`)}
-          >
-            <View style={styles.rowLeft}>
-              <Text style={styles.symbol}>{item.symbol}</Text>
-              <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
-              <Text style={styles.addedAt}>
-                Added {new Date(item.addedAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-              </Text>
-            </View>
-            <View style={styles.rowRight}>
-              <Text style={styles.price}>${item.price.toFixed(2)}</Text>
-              <Text style={[styles.pct, { color: item.changePercent >= 0 ? COLORS.positive : COLORS.negative }]}>
-                {item.changePercent >= 0 ? '+' : ''}{item.changePercent.toFixed(2)}%
-              </Text>
-            </View>
+    <>
+      <Stack.Screen options={{
+        headerRight: () => (
+          <TouchableOpacity onPress={() => setEditMode(e => !e)} style={[styles.editBtn, editMode && styles.editBtnActive]}>
+            <Text style={[styles.editBtnText, editMode && styles.editBtnTextActive]}>
+              {editMode ? 'Done' : 'Reorder'}
+            </Text>
           </TouchableOpacity>
-        </SwipeableRow>
-      )}
-    />
+        ),
+      }} />
+    <ScrollView ref={scrollRef} style={styles.container} contentContainerStyle={styles.content}>
+      <DraggableList
+        data={stocks}
+        keyExtractor={(item) => item.symbol}
+        itemHeight={ROW_HEIGHT}
+        editMode={editMode}
+        scrollRef={scrollRef}
+        onReorder={(from, to) => reorder(from, to)}
+        renderItem={(item) => (
+          <SwipeableRow onDelete={() => remove(item.symbol)}>
+            <TouchableOpacity
+              style={styles.row}
+              activeOpacity={1}
+              onPress={() => router.push(`/stock/${item.symbol}`)}
+            >
+              <View style={styles.rowLeft}>
+                <View style={styles.symbolRow}>
+                  <Text style={styles.symbol}>{item.symbol}</Text>
+                  <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
+                </View>
+              </View>
+              <View style={styles.rowRight}>
+                <Text style={styles.price}>${item.price.toFixed(2)}</Text>
+                <Text style={[styles.pct, { color: item.changePercent >= 0 ? COLORS.positive : COLORS.negative }]}>
+                  {item.changePercent >= 0 ? '+' : ''}{item.changePercent.toFixed(2)}%
+                </Text>
+              </View>
+            </TouchableOpacity>
+          </SwipeableRow>
+        )}
+      />
+    </ScrollView>
+    </>
   );
 }
 
 const DELETE_WIDTH = 80;
-const ROW_HEIGHT = 76;
 const SWIPE_THRESHOLD = DELETE_WIDTH * 0.5;
+const ROW_H = 76;
 
 function SwipeableRow({ children, onDelete }: { children: React.ReactNode; onDelete: () => void }) {
   const translateX = useRef(new Animated.Value(0)).current;
@@ -96,7 +115,7 @@ function SwipeableRow({ children, onDelete }: { children: React.ReactNode; onDel
 
   return (
     <Animated.View style={{
-      height: rowHeight.interpolate({ inputRange: [0, 1], outputRange: [0, ROW_HEIGHT] }),
+      height: rowHeight.interpolate({ inputRange: [0, 1], outputRange: [0, ROW_H] }),
       overflow: 'hidden', marginBottom: 10,
     }}>
       <View style={styles.swipeContainer}>
@@ -123,6 +142,14 @@ const styles = StyleSheet.create({
   emptyIcon: { fontSize: 48, marginBottom: 12 },
   emptyTitle: { color: COLORS.text, fontSize: 18, fontWeight: '700', marginBottom: 8 },
   emptySubtitle: { color: COLORS.textSecondary, fontSize: 14, textAlign: 'center', lineHeight: 20 },
+  editBtn: {
+    marginRight: 16, paddingHorizontal: 10, paddingVertical: 4,
+    borderRadius: 6, backgroundColor: COLORS.surfaceAlt,
+    borderWidth: 1, borderColor: COLORS.border,
+  },
+  editBtnActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  editBtnText: { color: COLORS.textMuted, fontSize: 12, fontWeight: '700' },
+  editBtnTextActive: { color: '#000' },
 
   swipeContainer: { flex: 1, flexDirection: 'row', alignItems: 'stretch' },
   deleteBtn: {
@@ -137,12 +164,12 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.surface, borderRadius: 12,
     paddingHorizontal: 14, paddingVertical: 12,
     borderWidth: 1, borderColor: COLORS.border,
-    height: ROW_HEIGHT,
+    height: ROW_H,
   },
-  rowLeft: { flex: 1 },
-  symbol: { color: COLORS.text, fontWeight: '800', fontSize: 16 },
-  name: { color: COLORS.textSecondary, fontSize: 12, marginTop: 2 },
-  addedAt: { color: COLORS.textMuted, fontSize: 11, marginTop: 4 },
+  rowLeft: { flex: 1, justifyContent: 'center' },
+  symbolRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6, flexShrink: 1 },
+  symbol: { color: COLORS.text, fontWeight: '800', fontSize: 16, flexShrink: 0 },
+  name: { color: COLORS.textSecondary, fontSize: 12, flexShrink: 1 },
   rowRight: { alignItems: 'flex-end' },
   price: { color: COLORS.text, fontWeight: '700', fontSize: 15 },
   pct: { fontSize: 13, fontWeight: '600', marginTop: 2 },

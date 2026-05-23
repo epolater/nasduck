@@ -6,6 +6,7 @@ interface PortfolioState {
   stocks: PortfolioStock[];
   add: (stock: PortfolioStock) => Promise<void>;
   remove: (symbol: string) => Promise<void>;
+  reorder: (fromIndex: number, toIndex: number) => Promise<void>;
   has: (symbol: string) => boolean;
   load: () => Promise<void>;
 }
@@ -26,6 +27,14 @@ export const usePortfolioStore = create<PortfolioState>((set, get) => ({
     const updated = get().stocks.filter((s) => s.symbol !== symbol);
     set({ stocks: updated });
     await AsyncStorage.setItem(KEY, JSON.stringify(updated));
+  },
+
+  reorder: async (fromIndex, toIndex) => {
+    const stocks = [...get().stocks];
+    const [moved] = stocks.splice(fromIndex, 1);
+    stocks.splice(toIndex, 0, moved);
+    set({ stocks });
+    await AsyncStorage.setItem(KEY, JSON.stringify(stocks));
   },
 
   has: (symbol) => get().stocks.some((s) => s.symbol === symbol),

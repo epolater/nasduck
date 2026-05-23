@@ -1,4 +1,5 @@
 import { useRouter } from 'expo-router';
+import { useKeepAwake } from 'expo-keep-awake';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -15,7 +16,7 @@ import {
 
 const ROW_H    = 40;
 const HEADER_H = 36;
-import { COLORS } from '../../constants';
+import { COLORS, CLOUD_SERVER_URL } from '../../constants';
 import { getApiKey } from '../../services/finnhub';
 import { useCriteriaStore } from '../../store/criteriaStore';
 import { useScanStore } from '../../store/scanStore';
@@ -23,7 +24,22 @@ import { useSettingsStore } from '../../store/settingsStore';
 import { useSignalsStore } from '../../store/signalsStore';
 import { useWatchlistStore } from '../../store/watchlistStore';
 import { abortScan, isScanDue, restartScan, runDailyScan } from '../../tasks/dailyScanner';
+import * as Notifications from 'expo-notifications';
+import { triggerServerScan, stopServerScan, getCloudScanStatus, registerWithServer, getDeviceId } from '../../services/serverSync';
+import { useServerLogStore } from '../../store/serverLogStore';
 import { Signal } from '../../types';
+import Svg, { Path } from 'react-native-svg';
+
+function CloudIcon({ size = 13, color = COLORS.primary }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size * 1.4} height={size} viewBox="0 0 20 14" fill="none">
+      <Path
+        d="M15.5 13H5a4 4 0 1 1 .8-7.93A4.5 4.5 0 1 1 15.5 13z"
+        stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
 
 // Column widths
 const COL_SYMBOL   = 64;
@@ -61,7 +77,7 @@ export default function SignalsScreen() {
   const scan = useScanStore((s) => s.scan);
   const universe = useScanStore((s) => s.universe);
   const resumeIndex = useScanStore((s) => s.resumeIndex);
-  const { scanHour, scanMinute, minScore } = useSettingsStore();
+  const { scanHour, scanMinute, minScore, minMarketCap, serverRegistered } = useSettingsStore();
   const { criteria } = useCriteriaStore();
   const isWatched = useWatchlistStore((s) => s.has);
   const [tab, setTab] = useState<'buy' | 'sell'>('buy');
@@ -69,6 +85,12 @@ export default function SignalsScreen() {
   const [sortCol, setSortCol] = useState<SortCol>('score');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [filterModalVisible, setFilterModalVisible] = useState(false);
+  const [cloudScanning, setCloudScanning] = useState(false);
+  const [cloudPhase, setCloudPhase] = useState<string>('');
+  const [cloudResumeIndex, setCloudResumeIndex] = useState<number | null>(null);
+  const [cloudTotal, setCloudTotal] = useState<number>(0);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const { addLog } = useServerLogStore();
   const appState = useRef(AppState.currentState);
 
   // Animated values drive frozen column + header in sync
@@ -78,6 +100,9 @@ export default function SignalsScreen() {
   const negY = useRef(Animated.multiply(scrollY, -1)).current;
 
   const isScanning = scan.status === 'scanning';
+
+  // Keep screen awake while scan is running
+  useKeepAwake(isScanning ? 'nasduck-scan' : undefined);
 
   useEffect(() => { setActiveFilters(new Set()); setSortCol('score'); setSortDir('desc'); }, [tab]);
 
@@ -95,17 +120,188 @@ export default function SignalsScreen() {
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
       if (appState.current.match(/inactive|background/) && next === 'active') {
-        checkAndRunScan();
+        if (serverRegistered) checkServerScanState();
+        else checkAndRunScan();
       }
       appState.current = next;
     });
-    checkAndRunScan();
+    if (serverRegistered) { checkServerScanState(); }
+    else checkAndRunScan();
     return () => sub.remove();
-  }, [scanHour, scanMinute]);
+  }, [scanHour, scanMinute, serverRegistered]);
+
+  // On open/resume: sync with server state
+  async function checkServerScanState() {
+    addLog(`Checking server… (${CLOUD_SERVER_URL})`, 'info');
+    const { data: status, error } = await getCloudScanStatus();
+
+    if (!status) {
+      addLog(`❌ ${error ?? 'No response'}`, 'err');
+      // If 404 (not registered), auto-register and retry once
+      if (error?.includes('404') || error?.includes('not registered')) {
+        addLog('Device not registered — registering now…', 'info');
+        const { universe } = useScanStore.getState();
+        addLog(`Sending universe: ${universe.stocks.length} stocks`, 'info');
+        const reg = await registerWithServer();
+        addLog(reg.ok ? `✅ Registered: ${reg.message}` : `❌ Register failed: ${reg.error}`, reg.ok ? 'ok' : 'err');
+        if (reg.ok) {
+          const retry = await getCloudScanStatus();
+          if (retry.data) {
+            addLog('✅ Server reachable after re-register', 'ok');
+          }
+        }
+      }
+      return;
+    }
+
+    addLog(`scanning=${status.scanning}  phase=${status.phase ?? 'idle'}  ${status.progress}/${status.total}`, 'info');
+    if (status.resumeIndex) {
+      setCloudResumeIndex(status.resumeIndex);
+      setCloudTotal(status.universeTotal);
+      addLog(`⏸ Paused at ${status.resumeIndex}/${status.universeTotal} — tap Continue to resume`, 'info');
+    }
+    if (status.lastScanAt) {
+      const d = new Date(status.lastScanAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      addLog(`Last scan: ${d}  (${status.lastSignals?.length ?? 0} signals)`, 'ok');
+    } else if (!status.resumeIndex) {
+      addLog('No previous scan on server', 'info');
+    }
+
+    if (status.scanning) {
+      addLog('Server is already scanning — resuming…', 'info');
+      setCloudScanning(true);
+      startCloudPolling();
+    } else {
+      // Always sync signals and lastScanAt from server — covers crash/restart case
+      if (status.lastSignals?.length > 0) {
+        setSignals(status.lastSignals);
+        addLog(`Loaded ${status.lastSignals.length} signals from server`, 'ok');
+      }
+      if (status.lastScanAt) {
+        useScanStore.getState().markScanComplete();
+        useScanStore.setState(s => ({ scan: { ...s.scan, lastScanAt: status.lastScanAt, status: 'done' } }));
+      }
+      checkAndRunScan();
+    }
+  }
+
+  // Poll server for live progress while cloud scanning
+  const setSignals = useSignalsStore((s) => s.setSignals);
+
+  function startCloudPolling() {
+    stopCloudPolling();
+    let lastEvaluated = 0, lastNoData = 0, lastFiltered = 0;
+    let lastPhase = '';
+    let seenScanning = false;
+    let pollCount = 0;
+
+    useScanStore.getState().setScanStatus('scanning', 0, 0);
+    addLog('Polling server for scan status…', 'info');
+
+    pollRef.current = setInterval(async () => {
+      pollCount++;
+      const { data: status, error } = await getCloudScanStatus();
+
+      if (!status) {
+        addLog(`Poll #${pollCount}: ${error ?? 'no response'}`, 'err');
+        return;
+      }
+
+      if (status.phase !== lastPhase) {
+        const phaseLabel: Record<string, string> = {
+          starting: 'Server starting scan…',
+          loading_universe: `Loading stock universe…`,
+          scanning: `Scan loop started (${status.total} stocks)`,
+          idle: 'Scan idle',
+        };
+        addLog(phaseLabel[status.phase ?? ''] ?? `Phase: ${status.phase}`, 'info');
+        lastPhase = status.phase ?? '';
+      }
+
+      const { setScanStatus, incrementScanCounters, markScanComplete } = useScanStore.getState();
+
+      if (status.scanning) {
+        seenScanning = true;
+        setCloudPhase(status.phase ?? 'scanning');
+        setScanStatus('scanning', status.progress, status.total);
+        const dEval = status.evaluated - lastEvaluated;
+        const dNoData = status.noData - lastNoData;
+        const dFiltered = status.filtered - lastFiltered;
+        if (dEval > 0 || dNoData > 0 || dFiltered > 0) {
+          incrementScanCounters({ evaluated: dEval, noData: dNoData, filtered: dFiltered });
+          lastEvaluated = status.evaluated;
+          lastNoData = status.noData;
+          lastFiltered = status.filtered;
+        }
+        if (status.signals?.length > 0) {
+          setSignals(status.signals);
+          addLog(`🎯 ${status.signals.length} match${status.signals.length !== 1 ? 'es' : ''} found so far`, 'ok');
+        }
+      } else if (seenScanning) {
+        stopCloudPolling();
+        setCloudScanning(false);
+        setCloudResumeIndex(null);
+        markScanComplete();
+        if (status.lastSignals?.length > 0) {
+          setSignals(status.lastSignals);
+          addLog(`✅ Scan complete — ${status.lastSignals.length} signals found`, 'ok');
+        } else {
+          addLog('✅ Scan complete — no signals found', 'ok');
+        }
+        if (status.lastScanAt) {
+          useScanStore.setState(s => ({ scan: { ...s.scan, lastScanAt: status.lastScanAt, status: 'done' } }));
+        }
+      }
+    }, 2000);
+  }
+
+  function stopCloudPolling() {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+  }
+
+  async function startCloudScan(fresh: boolean) {
+    if (fresh) useServerLogStore.getState().clear();
+    setCloudScanning(true);
+    const { universe } = useScanStore.getState();
+    addLog(fresh ? 'Starting fresh scan on server…' : 'Continuing scan on server…', 'info');
+    addLog(`Device: ${getDeviceId()}`, 'info');
+    let result = await triggerServerScan(fresh);
+    if (!result.ok && result.error?.includes('404')) {
+      addLog('Device not registered — re-registering…', 'info');
+      addLog(`Sending universe: ${universe.stocks.length} stocks`, 'info');
+      const regResult = await registerWithServer();
+      addLog(regResult.ok ? `✅ Registered: ${regResult.message}` : `❌ Register failed: ${regResult.error}`, regResult.ok ? 'ok' : 'err');
+      if (regResult.ok) result = await triggerServerScan(fresh);
+    }
+    if (result.ok) {
+      addLog(`✅ Server accepted — ${result.resumeIndex ? `continuing from ${result.resumeIndex}/${result.total}` : 'fresh scan'}`, 'ok');
+      if (fresh) setCloudResumeIndex(null);
+      startCloudPolling();
+    } else {
+      addLog(`❌ Scan failed: ${result.error}`, 'err');
+      setCloudScanning(false);
+      useScanStore.getState().setScanStatus('error', 0, 0, result.error ?? 'Could not reach server');
+    }
+  }
+
+  // Reset on unmount
+  useEffect(() => () => stopCloudPolling(), []);
+
+  // Push notification listener — react to scan completion notifications
+  useEffect(() => {
+    const sub = Notifications.addNotificationReceivedListener(() => {
+      stopCloudPolling();
+      setCloudScanning(false);
+      useScanStore.getState().markScanComplete();
+    });
+    return () => sub.remove();
+  }, []);
 
   function checkAndRunScan() {
+    if (serverRegistered) return; // server handles its own schedule
     if (!getApiKey()) return;
     if (isScanning) return;
+    if (universe.stocks.length === 0) return;
     const { lastScanAt } = useScanStore.getState().scan;
     if (isScanDue(lastScanAt, scanHour, scanMinute)) {
       runDailyScan();
@@ -138,6 +334,10 @@ export default function SignalsScreen() {
   const displayed = useMemo(() => {
     let rows = tabSignals;
     if (tab === 'buy') rows = rows.filter((s) => s.score >= minScore);
+    if (minMarketCap > 0) {
+      const minCapRaw = minMarketCap * 1_000_000_000;
+      rows = rows.filter((s) => s.marketCap == null || s.marketCap >= minCapRaw);
+    }
     if (activeFilters.size > 0) {
       rows = rows.filter((s) => {
         const matched = new Set(s.matchedCriteria.map((c) => c.split(':')[0].trim()));
@@ -156,7 +356,7 @@ export default function SignalsScreen() {
       const bHas = b.matchedCriteria.some((c) => c.split(':')[0].trim() === sortCol) ? 1 : 0;
       return dir * (aHas - bHas);
     });
-  }, [tabSignals, activeFilters, sortCol, sortDir]);
+  }, [tabSignals, activeFilters, sortCol, sortDir, minScore, minMarketCap]);
 
   const lastScan = scan.lastScanAt
     ? new Date(scan.lastScanAt).toLocaleString([], {
@@ -172,11 +372,17 @@ export default function SignalsScreen() {
           <ActivityIndicator size="small" color={COLORS.primary} />
           <View style={{ flex: 1 }}>
             <Text style={styles.scanningText}>
-              Scanning… {scan.progress}/{scan.total}
-              {'  '}
-              <Text style={styles.scanningDetail}>
-                ✓{scan.evaluated} · ∅{scan.noData} · ⊘{scan.filtered}
-              </Text>
+              {serverRegistered && <><CloudIcon />{' '}</>}
+              {serverRegistered && (cloudPhase === 'loading_universe')
+                ? 'Loading stock universe…'
+                : serverRegistered && (cloudPhase === 'starting' || cloudPhase === '')
+                ? 'Starting scan…'
+                : `Scanning… ${scan.progress}/${scan.total}`}
+              {(cloudPhase === 'scanning' || !serverRegistered) && scan.total > 0 && (
+                <Text style={styles.scanningDetail}>
+                  {'  '}✓{scan.evaluated} · ∅{scan.noData} · ⊘{scan.filtered}
+                </Text>
+              )}
             </Text>
             {signals.length > 0 && (
               <Text style={styles.scanningMatches}>
@@ -184,10 +390,31 @@ export default function SignalsScreen() {
               </Text>
             )}
           </View>
-          <TouchableOpacity onPress={restartScan} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-            <Text style={styles.restartText}>↺ Restart</Text>
+          <TouchableOpacity
+            onPress={() => { if (serverRegistered) { stopServerScan(); stopCloudPolling(); setCloudScanning(false); useScanStore.getState().setScanStatus('idle'); } else restartScan(); }}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Text style={styles.restartText}>{serverRegistered ? '' : '↺ Restart'}</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={abortScan} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+          <TouchableOpacity
+            onPress={async () => {
+              if (serverRegistered) {
+                const curProgress = useScanStore.getState().scan.progress;
+                const curTotal = useScanStore.getState().scan.total;
+                stopCloudPolling();
+                setCloudScanning(false);
+                useScanStore.getState().setScanStatus('idle');
+                await stopServerScan();
+                // Server will save resumeIndex — reflect it immediately in UI
+                if (curProgress > 0) {
+                  setCloudResumeIndex(curProgress);
+                  setCloudTotal(curTotal);
+                  addLog(`⏸ Stopped at ${curProgress}/${curTotal} — tap Continue to resume`, 'info');
+                }
+              } else abortScan();
+            }}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
             <Text style={styles.stopText}>■ Stop</Text>
           </TouchableOpacity>
         </View>
@@ -195,12 +422,13 @@ export default function SignalsScreen() {
         <View style={styles.statusBar}>
           {!getApiKey() ? (
             <Text style={styles.warningText}>⚠️ Set your Finnhub API key in Settings</Text>
-          ) : universe.stocks.length === 0 ? (
+          ) : (!serverRegistered && universe.stocks.length === 0) ? (
             <Text style={styles.warningText}>⚠️ Build scan universe in Settings first</Text>
           ) : (
             <View style={{ flex: 1 }}>
               <Text style={styles.statusText}>
-                {lastScan ? `Last scan: ${lastScan}` : 'No scan run yet today'}
+                {serverRegistered && <><CloudIcon color={COLORS.textMuted} />{' '}</>}
+                {lastScan ? `Last scan: ${lastScan}` : 'No scan yet'}
                 {scan.status === 'error' && (
                   <Text style={styles.errorText}>  ⚠️ {scan.error}</Text>
                 )}
@@ -212,25 +440,47 @@ export default function SignalsScreen() {
               )}
             </View>
           )}
-          {(resumeIndex != null || signals.length > 0) && (
+          {/* Restart button — local or cloud */}
+          {((!serverRegistered && (resumeIndex != null || signals.length > 0)) ||
+            (serverRegistered && cloudResumeIndex != null)) && (
             <TouchableOpacity
               style={styles.restartBtn}
-              onPress={restartScan}
-              disabled={!getApiKey() || universe.stocks.length === 0}
+              onPress={async () => {
+                if (serverRegistered) {
+                  setCloudResumeIndex(null);
+                  await startCloudScan(true); // fresh=true
+                } else {
+                  restartScan();
+                }
+              }}
+              disabled={!getApiKey() || (!serverRegistered && universe.stocks.length === 0)}
             >
               <Text style={styles.restartBtnText}>↺ Restart</Text>
             </TouchableOpacity>
           )}
+          {/* Scan / Continue button */}
           <TouchableOpacity
-            style={[styles.scanBtn, resumeIndex != null && styles.scanBtnResume]}
-            onPress={() => runDailyScan()}
-            disabled={!getApiKey() || universe.stocks.length === 0}
+            style={[styles.scanBtn,
+              (!serverRegistered && resumeIndex != null) && styles.scanBtnResume,
+              (serverRegistered && cloudResumeIndex != null) && styles.scanBtnResume,
+            ]}
+            onPress={() => serverRegistered ? startCloudScan(false) : runDailyScan()}
+            disabled={!getApiKey() || (!serverRegistered && universe.stocks.length === 0)}
           >
-            <Text style={styles.scanBtnText}>
-              {resumeIndex != null
-                ? `▶ Continue (${resumeIndex}/${scan.total || universe.stocks.length})`
-                : 'Scan Now'}
-            </Text>
+            {serverRegistered ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                <CloudIcon size={12} color="#000" />
+                <Text style={styles.scanBtnText}>
+                  {cloudResumeIndex != null ? `Continue (${cloudResumeIndex}/${cloudTotal})` : 'Scan Now'}
+                </Text>
+              </View>
+            ) : (
+              <Text style={styles.scanBtnText}>
+                {resumeIndex != null
+                  ? `▶ Continue (${resumeIndex}/${scan.total || universe.stocks.length})`
+                  : 'Scan Now'}
+              </Text>
+            )}
           </TouchableOpacity>
         </View>
       )}
@@ -421,9 +671,11 @@ export default function SignalsScreen() {
                       onPress={() => router.push(`/stock/${signal.symbol}`)}
                     >
                       <Text style={styles.symbolText}>{signal.symbol}</Text>
-                      {isWatched(signal.symbol) && (
-                        <Text style={styles.starIcon}>★</Text>
-                      )}
+                      <View style={styles.frozenBadges}>
+                        {isWatched(signal.symbol) && (
+                          <Text style={styles.starIcon}>★</Text>
+                        )}
+                      </View>
                     </TouchableOpacity>
                   ))}
                 </Animated.View>
@@ -495,6 +747,7 @@ export default function SignalsScreen() {
           </View>
         );
       })()}
+
     </View>
   );
 }
@@ -672,12 +925,16 @@ const styles = StyleSheet.create({
   sortArrow: { color: COLORS.primary, fontSize: 10, fontWeight: '700' },
 
   symbolText: { color: COLORS.text, fontWeight: '700', fontSize: 13 },
+  frozenBadges: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   starIcon: { color: '#f5c518', fontSize: 11 },
+  optionsBadge: { color: '#00d4aa', fontSize: 11 },
   priceText: { color: COLORS.text, fontSize: 12 },
   pctText: { fontSize: 12, fontWeight: '600' },
   countText: { fontSize: 12, fontWeight: '700', textAlign: 'center' },
 
   matchDot: { width: 10, height: 10, borderRadius: 5 },
+
+  // ── Cloud log panel ────────────────────────────────────────────────
 
   // ── Empty state ────────────────────────────────────────────────────
   empty: {

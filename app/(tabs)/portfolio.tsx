@@ -1,20 +1,25 @@
 import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'expo-router';
+import { Stack } from 'expo-router';
 import {
   ActivityIndicator,
   Animated,
-  FlatList,
   PanResponder,
+  ScrollView,
+  // FlatList replaced by ScrollView + DraggableList
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import Svg, { Circle, Line } from 'react-native-svg';
 import { COLORS } from '../../constants';
 import { fetchQuote, searchSymbol } from '../../services/finnhub';
 import { usePortfolioStore } from '../../store/portfolioStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import { PortfolioStock } from '../../types';
+import { DraggableList } from '../../components/DraggableList';
 
 interface QuoteData {
   price: number;
@@ -22,7 +27,10 @@ interface QuoteData {
 }
 
 export default function PortfolioScreen() {
-  const { stocks, add, remove } = usePortfolioStore();
+  const router = useRouter();
+  const { stocks, add, remove, reorder } = usePortfolioStore();
+  const scrollRef = useRef<ScrollView>(null);
+  const [editMode, setEditMode] = useState(false);
   const { apiKey } = useSettingsStore();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<{ symbol: string; name: string }[]>([]);
@@ -78,12 +86,15 @@ export default function PortfolioScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.info}>
-        <Text style={styles.infoText}>
-          Stocks in your portfolio are checked against sell criteria during the daily scan.
-        </Text>
-      </View>
-
+      <Stack.Screen options={{
+        headerRight: () => stocks.length > 1 ? (
+          <TouchableOpacity onPress={() => setEditMode(e => !e)} style={[styles.editBtn, editMode && styles.editBtnActive]}>
+            <Text style={[styles.editBtnText, editMode && styles.editBtnTextActive]}>
+              {editMode ? 'Done' : 'Reorder'}
+            </Text>
+          </TouchableOpacity>
+        ) : null,
+      }} />
       <View style={styles.searchRow}>
         <TextInput
           style={styles.input}
@@ -93,7 +104,17 @@ export default function PortfolioScreen() {
           placeholderTextColor={COLORS.textMuted}
           editable={!!apiKey}
         />
-        {searching && <ActivityIndicator size="small" color={COLORS.primary} style={styles.spinner} />}
+        <View style={styles.searchIconWrap} pointerEvents="none">
+          {searching
+            ? <ActivityIndicator size="small" color={COLORS.textMuted} />
+            : (
+              <Svg width={16} height={16} viewBox="0 0 16 16" fill="none">
+                <Circle cx="6.5" cy="6.5" r="5" stroke={COLORS.textMuted} strokeWidth="1.5" />
+                <Line x1="10.5" y1="10.5" x2="14.5" y2="14.5" stroke={COLORS.textMuted} strokeWidth="1.5" strokeLinecap="round" />
+              </Svg>
+            )
+          }
+        </View>
       </View>
 
       {results.length > 0 && (
@@ -119,37 +140,48 @@ export default function PortfolioScreen() {
           <Text style={styles.emptySubtitle}>Add stocks you own to receive sell signals.</Text>
         </View>
       ) : (
-        <FlatList
-          data={stocks}
-          keyExtractor={(item) => item.symbol}
-          renderItem={({ item }) => (
-            <SwipeableRow onDelete={() => remove(item.symbol)}>
-              <View style={styles.stockRow}>
-                <View style={styles.stockInfo}>
-                  <Text style={styles.stockSymbol}>{item.symbol}</Text>
-                  <Text style={styles.stockName} numberOfLines={1}>{item.name}</Text>
-                </View>
-                <View style={styles.priceBlock}>
-                  {loadingQuotes && !quotes[item.symbol] ? (
-                    <ActivityIndicator size="small" color={COLORS.textMuted} />
-                  ) : quotes[item.symbol] ? (
-                    <>
-                      <Text style={styles.price}>${quotes[item.symbol].price.toFixed(2)}</Text>
-                      <Text style={[
-                        styles.change,
-                        { color: quotes[item.symbol].changePercent >= 0 ? COLORS.buy : COLORS.sell }
-                      ]}>
-                        {quotes[item.symbol].changePercent >= 0 ? '+' : ''}
-                        {quotes[item.symbol].changePercent.toFixed(2)}%
-                      </Text>
-                    </>
-                  ) : null}
-                </View>
-              </View>
-            </SwipeableRow>
-          )}
-          contentContainerStyle={styles.list}
-        />
+        <ScrollView ref={scrollRef} contentContainerStyle={styles.list}>
+          <DraggableList
+            data={stocks}
+            keyExtractor={(item) => item.symbol}
+            itemHeight={80}
+            editMode={editMode}
+            scrollRef={scrollRef}
+            onReorder={(from, to) => reorder(from, to)}
+            renderItem={(item) => (
+              <SwipeableRow onDelete={() => remove(item.symbol)}>
+                <TouchableOpacity
+                  style={styles.stockRow}
+                  activeOpacity={1}
+                  onPress={() => router.push(`/stock/${item.symbol}`)}
+                >
+                  <View style={styles.stockInfo}>
+                    <View style={styles.symbolRow}>
+                      <Text style={styles.stockSymbol}>{item.symbol}</Text>
+                      <Text style={styles.stockName} numberOfLines={1}>{item.name}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.priceBlock}>
+                    {loadingQuotes && !quotes[item.symbol] ? (
+                      <ActivityIndicator size="small" color={COLORS.textMuted} />
+                    ) : quotes[item.symbol] ? (
+                      <>
+                        <Text style={styles.price}>${quotes[item.symbol].price.toFixed(2)}</Text>
+                        <Text style={[
+                          styles.change,
+                          { color: quotes[item.symbol].changePercent >= 0 ? COLORS.buy : COLORS.sell }
+                        ]}>
+                          {quotes[item.symbol].changePercent >= 0 ? '+' : ''}
+                          {quotes[item.symbol].changePercent.toFixed(2)}%
+                        </Text>
+                      </>
+                    ) : null}
+                  </View>
+                </TouchableOpacity>
+              </SwipeableRow>
+            )}
+          />
+        </ScrollView>
       )}
     </View>
   );
@@ -206,16 +238,16 @@ function SwipeableRow({ children, onDelete }: { children: React.ReactNode; onDel
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background, paddingHorizontal: 16 },
-  info: {
-    backgroundColor: COLORS.surface, borderRadius: 10, padding: 12,
-    marginTop: 12, borderWidth: 1, borderColor: COLORS.border,
-  },
-  infoText: { color: COLORS.textSecondary, fontSize: 13, lineHeight: 18 },
   searchRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12 },
   input: {
     flex: 1, backgroundColor: COLORS.surface, borderRadius: 10,
     borderWidth: 1, borderColor: COLORS.border,
-    color: COLORS.text, paddingHorizontal: 14, paddingVertical: 11, fontSize: 14,
+    color: COLORS.text, paddingHorizontal: 14, paddingVertical: 11,
+    paddingRight: 40, fontSize: 14,
+  },
+  searchIconWrap: {
+    position: 'absolute', right: 12,
+    justifyContent: 'center', alignItems: 'center',
   },
   spinner: { position: 'absolute', right: 12 },
   dropdown: {
@@ -242,9 +274,10 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.surface, borderRadius: 10, padding: 14,
     borderWidth: 1, borderColor: COLORS.border, height: 72,
   },
-  stockInfo: { flex: 1 },
-  stockSymbol: { color: COLORS.text, fontWeight: '700', fontSize: 15 },
-  stockName: { color: COLORS.textSecondary, fontSize: 12, marginTop: 2 },
+  stockInfo: { flex: 1, justifyContent: 'center' },
+  symbolRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6, flexShrink: 1 },
+  stockSymbol: { color: COLORS.text, fontWeight: '700', fontSize: 15, flexShrink: 0 },
+  stockName: { color: COLORS.textSecondary, fontSize: 12, flexShrink: 1 },
   priceBlock: { alignItems: 'flex-end', minWidth: 70 },
   price: { color: COLORS.text, fontWeight: '700', fontSize: 15 },
   change: { fontSize: 12, fontWeight: '600', marginTop: 2 },
@@ -254,4 +287,12 @@ const styles = StyleSheet.create({
   emptyIcon: { fontSize: 48, marginBottom: 12 },
   emptyTitle: { color: COLORS.text, fontSize: 18, fontWeight: '700', marginBottom: 8 },
   emptySubtitle: { color: COLORS.textSecondary, fontSize: 14, textAlign: 'center' },
+  editBtn: {
+    marginRight: 16, paddingHorizontal: 10, paddingVertical: 4,
+    borderRadius: 6, backgroundColor: COLORS.surfaceAlt,
+    borderWidth: 1, borderColor: COLORS.border,
+  },
+  editBtnActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  editBtnText: { color: COLORS.textMuted, fontSize: 12, fontWeight: '700' },
+  editBtnTextActive: { color: '#000' },
 });

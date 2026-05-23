@@ -9,7 +9,8 @@ import { useWatchlistStore } from '../store/watchlistStore';
 import { useScanStore } from '../store/scanStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useSignalsStore } from '../store/signalsStore';
-import { scheduleDailyNotification } from '../tasks/dailyScanner';
+import * as Notifications from 'expo-notifications';
+import { registerWithServer } from '../services/serverSync';
 
 export default function RootLayout() {
   useEffect(() => {
@@ -27,8 +28,15 @@ export default function RootLayout() {
 
       await requestNotificationPermissions();
 
-      const { scanHour: h, scanMinute: m } = useSettingsStore.getState();
-      await scheduleDailyNotification(h, m);
+      // Cancel any previously scheduled daily reminder notifications
+      await Notifications.cancelAllScheduledNotificationsAsync();
+
+      const { serverRegistered } = useSettingsStore.getState();
+
+      if (serverRegistered) {
+        // Server handles scheduling — re-register to restore after server restart
+        registerWithServer().catch(() => {});
+      }
     }
     init();
   }, []);

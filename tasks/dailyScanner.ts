@@ -1,6 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import { CRITERIA_WEIGHTS, RATE_LIMIT_MS, UNIVERSE_MIN_PRICE, UNIVERSE_MIN_VOLUME } from '../constants';
 import { delay, fetchCandles, fetchMarketCap, fetchNasdaqSymbols, fetchQuote, getApiKey } from '../services/finnhub';
+import { fetchOptionsData } from '../services/options';
 import { useCriteriaStore } from '../store/criteriaStore';
 import { usePortfolioStore } from '../store/portfolioStore';
 import { useScanStore } from '../store/scanStore';
@@ -90,7 +91,7 @@ async function _runDailyScanCore(): Promise<void> {
   const { stocks: portfolioStocks } = usePortfolioStore.getState();
   const { setScanStatus, incrementScanCounters, markScanComplete, addToSkipList, saveResumeIndex, clearResumeIndex, resumeIndex } = useScanStore.getState();
   const { addSignal, persist, clear } = useSignalsStore.getState();
-  const { minChangePct } = useSettingsStore.getState();
+  const { minChangePct, minMarketCap } = useSettingsStore.getState();
 
   // Read criteria fresh right now (not captured as a stale snapshot)
   const buyCriteria = useCriteriaStore.getState().enabledBuyCriteria();
@@ -118,13 +119,12 @@ async function _runDailyScanCore(): Promise<void> {
   const from = to - 86400 * 260;
 
   const failedFilter: string[] = [];
-  const marketCapCriteriaEnabled = buyCriteria.some(c => c.id === 'min_market_cap');
+  const marketCapFilterEnabled = minMarketCap > 0;
 
   for (let i = startFrom; i < targets.length; i++) {
     if (scanAbortFlag) {
-      // Save where we stopped so we can resume
       await saveResumeIndex(i);
-      await persist(); // flush signals found so far to storage
+      await persist();
       setScanStatus('idle');
       return;
     }
@@ -133,7 +133,7 @@ async function _runDailyScanCore(): Promise<void> {
     setScanStatus('scanning', i + 1, targets.length);
     const [candles, stockMarketCap] = await Promise.all([
       fetchCandles(stock.symbol, 'D', from, to),
-      marketCapCriteriaEnabled ? fetchMarketCap(stock.symbol) : Promise.resolve(null),
+      marketCapFilterEnabled ? fetchMarketCap(stock.symbol) : Promise.resolve(null),
     ]);
 
     if (scanAbortFlag) {
@@ -158,6 +158,16 @@ async function _runDailyScanCore(): Promise<void> {
       continue;
     }
 
+    // Market cap hard filter
+    if (marketCapFilterEnabled && !isPortfolioStock) {
+      const minCap = minMarketCap * 1_000_000_000;
+      if (!stockMarketCap || stockMarketCap < minCap) {
+        incrementScanCounters({ filtered: 1 });
+        await interruptibleDelay(RATE_LIMIT_MS);
+        continue;
+      }
+    }
+
     incrementScanCounters({ evaluated: 1 });
 
     const currentPrice = candles.close[candles.close.length - 1];
@@ -169,33 +179,10 @@ async function _runDailyScanCore(): Promise<void> {
     const liveBuyCriteria = enabledBuyCriteria();
     const liveSellCriteria = enabledSellCriteria();
 
-    const buyResults = liveBuyCriteria.map((c) => {
-      if (c.id === 'min_market_cap') {
-        const minCap = c.threshold * 1_000_000_000;
-        const matched = stockMarketCap != null && stockMarketCap >= minCap;
-        return {
-          c,
-          result: {
-            matched,
-            detail: stockMarketCap != null ? `Cap: $${(stockMarketCap / 1e9).toFixed(2)}B` : 'Cap: unknown',
-          },
-        };
-      }
-      return { c, result: evaluateCriteria(c, candles) };
-    });
+    const buyResults = liveBuyCriteria.map((c) => ({ c, result: evaluateCriteria(c, candles) }));
     const sellResults = isPortfolioStock
       ? liveSellCriteria.map((c) => ({ c, result: evaluateCriteria(c, candles) }))
       : [];
-
-    // min_market_cap is a hard filter — must pass regardless of matchMode
-    if (marketCapCriteriaEnabled && !isPortfolioStock) {
-      const capResult = buyResults.find(r => r.c.id === 'min_market_cap');
-      if (capResult && !capResult.result?.matched) {
-        incrementScanCounters({ filtered: 1 });
-        await interruptibleDelay(RATE_LIMIT_MS);
-        continue;
-      }
-    }
 
     const matchedBuy = buyResults.filter((r) => r.result?.matched);
     const matchedSell = sellResults.filter((r) => r.result?.matched);
@@ -223,8 +210,9 @@ async function _runDailyScanCore(): Promise<void> {
     if (buyPassed || sellPassed) {
       const hasSell = sellPassed;
       const allMatched = [...matchedBuy, ...matchedSell].filter(r => r.c.id !== 'min_market_cap');
-      const score = Math.round(allMatched.reduce((sum, r) => {
-        const baseWeight = CRITERIA_WEIGHTS[r.c.id] ?? 1;
+      const weights = { ...CRITERIA_WEIGHTS, ...useSettingsStore.getState().criteriaWeights };
+      let score = Math.round(allMatched.reduce((sum, r) => {
+        const baseWeight = weights[r.c.id] ?? 1;
         // trending_up/down: scale by price change % (min 1pt, no cap — bigger move = higher score)
         if ((r.c.id === 'trending_up' || r.c.id === 'trending_down') && r.result?.value != null) {
           const absPct = Math.abs(r.result.value);
@@ -233,6 +221,40 @@ async function _runDailyScanCore(): Promise<void> {
         }
         return sum + baseWeight;
       }, 0));
+
+      // Enrich with options data via Yahoo Finance (no key required)
+      let optionsData = undefined;
+      try {
+        optionsData = await fetchOptionsData(stock.symbol);
+
+        // Evaluate options criteria
+        const { enabledBuyCriteria } = useCriteriaStore.getState();
+        const optionsCriteria = enabledBuyCriteria().filter(c =>
+          ['put_call_ratio_low', 'put_call_ratio_high', 'high_iv', 'near_max_pain'].includes(c.id)
+        );
+        for (const c of optionsCriteria) {
+          let matched = false;
+          let detail = '';
+          if (c.id === 'put_call_ratio_low' && optionsData.pcr != null) {
+            matched = optionsData.pcr < 0.7;
+            detail = `PCR: ${optionsData.pcr.toFixed(2)}`;
+          } else if (c.id === 'put_call_ratio_high' && optionsData.pcr != null) {
+            matched = optionsData.pcr > 1.0;
+            detail = `PCR: ${optionsData.pcr.toFixed(2)}`;
+          } else if (c.id === 'high_iv' && optionsData.ivAvg != null) {
+            matched = optionsData.ivAvg > 0.4;
+            detail = `IV: ${(optionsData.ivAvg * 100).toFixed(1)}%`;
+          } else if (c.id === 'near_max_pain' && optionsData.maxPain != null) {
+            matched = Math.abs(currentPrice - optionsData.maxPain) / optionsData.maxPain < 0.03;
+            detail = `MaxPain: $${optionsData.maxPain.toFixed(2)}`;
+          }
+          if (matched) {
+            matchedCriteria.push(`${c.name}: ${detail}`);
+            score += weights[c.id] ?? 1;
+          }
+        }
+      } catch (_) {}
+
       const signal: Signal = {
         id: `${stock.symbol}-${Date.now()}`,
         symbol: stock.symbol,
@@ -243,6 +265,8 @@ async function _runDailyScanCore(): Promise<void> {
         price: currentPrice,
         changePercent,
         generatedAt: Date.now(),
+        marketCap: stockMarketCap ?? candles.marketCap ?? null,
+        optionsData,
       };
       addSignal(signal); // shows up in the list immediately
     }
