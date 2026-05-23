@@ -64,8 +64,7 @@ async function scheduleServerWakeup(scanHour: number, scanMinute: number) {
 export default function RootLayout() {
   useEffect(() => {
     async function init() {
-      const { load: loadSettings, scanHour, scanMinute } = useSettingsStore.getState();
-      await loadSettings();
+      await useSettingsStore.getState().load();
 
       await Promise.all([
         useCriteriaStore.getState().load(),
