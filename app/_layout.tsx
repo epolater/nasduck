@@ -54,6 +54,7 @@ export default function RootLayout() {
       >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="stock/[symbol]" options={{ title: '' }} />
+        <Stack.Screen name="settings" options={{ headerShown: false }} />
       </Stack>
     </>
   );
