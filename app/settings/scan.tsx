@@ -4,6 +4,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TouchableOpacity,
   View,
@@ -81,7 +82,7 @@ const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const MINUTES = Array.from({ length: 60 }, (_, i) => i);
 
 export default function ScanScreen() {
-  const { scanHour, scanMinute, minChangePct, serverRegistered, save } = useSettingsStore();
+  const { scanHour, scanMinute, scanWeekends, minChangePct, serverRegistered, save } = useSettingsStore();
 
   const timeLabel = `${String(scanHour).padStart(2, '0')}:${String(scanMinute).padStart(2, '0')}`;
 
@@ -130,6 +131,22 @@ export default function ScanScreen() {
         </View>
 
         <Text style={styles.timeLabel}>{timeLabel} ET</Text>
+
+        <View style={styles.toggleRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.toggleLabel}>Scan on weekends</Text>
+            <Text style={styles.toggleSub}>Markets are closed but scan still runs</Text>
+          </View>
+          <Switch
+            value={scanWeekends}
+            onValueChange={(v) => {
+              save({ scanWeekends: v });
+              if (serverRegistered) registerWithServer().catch(() => {});
+            }}
+            trackColor={{ false: COLORS.border, true: COLORS.primary + '88' }}
+            thumbColor={scanWeekends ? COLORS.primary : COLORS.textMuted}
+          />
+        </View>
 
         <View style={styles.divider} />
 
@@ -237,4 +254,12 @@ const styles = StyleSheet.create({
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   note: { color: COLORS.textMuted, fontSize: 11, lineHeight: 16, marginTop: 4 },
+  toggleRow: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: COLORS.surface, borderRadius: 12,
+    borderWidth: 1, borderColor: COLORS.border,
+    paddingHorizontal: 14, paddingVertical: 12, marginTop: 12,
+  },
+  toggleLabel: { color: COLORS.text, fontWeight: '600', fontSize: 14 },
+  toggleSub: { color: COLORS.textMuted, fontSize: 11, marginTop: 2 },
 });

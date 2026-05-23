@@ -8,6 +8,7 @@ interface Settings {
   apiKey: string;
   scanHour: number;        // 0-23
   scanMinute: number;      // 0-59
+  scanWeekends: boolean;   // include weekends
   minChangePct: number;    // minimum absolute % move to include a stock in results
   minScore: number;        // minimum score to show in buy signals list
   minMarketCap: number;    // minimum market cap in billions (0 = disabled)
@@ -28,6 +29,7 @@ const DEFAULTS: Settings = {
   apiKey: '',
   scanHour: 18,
   scanMinute: 0,
+  scanWeekends: false,
   minChangePct: DEFAULT_MIN_CHANGE_PCT,
   minScore: 1,
   minMarketCap: 0,
@@ -56,6 +58,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       googleAiKey: updated.googleAiKey,
       groqKey: updated.groqKey,
       serverRegistered: updated.serverRegistered,
+      scanWeekends: updated.scanWeekends,
       criteriaWeights: updated.criteriaWeights,
     }));
   },

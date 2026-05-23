@@ -20,7 +20,7 @@ export async function registerWithServer(): Promise<{ ok: boolean; message?: str
     const tokenData = await Notifications.getExpoPushTokenAsync();
     const pushToken = tokenData.data;
 
-    const { apiKey, scanHour, scanMinute, minChangePct, minScore, minMarketCap, criteriaWeights } = useSettingsStore.getState();
+    const { apiKey, scanHour, scanMinute, scanWeekends, minChangePct, minScore, minMarketCap, criteriaWeights } = useSettingsStore.getState();
     const { criteria, matchMode } = useCriteriaStore.getState();
     const { universe } = (await import('../store/scanStore')).useScanStore.getState();
 
@@ -33,6 +33,7 @@ export async function registerWithServer(): Promise<{ ok: boolean; message?: str
       minChangePct,
       minScore,
       minMarketCap,
+      scanWeekends,
       criteriaWeights,
       scanHour,
       scanMinute,
