@@ -21,6 +21,12 @@ export async function registerWithServer(): Promise<{ ok: boolean; message?: str
     const pushToken = tokenData.data;
 
     const { apiKey, scanHour, scanMinute, scanWeekends, minChangePct, minScore, minMarketCap, criteriaWeights } = useSettingsStore.getState();
+
+    // Convert local scan time to UTC so server schedules correctly regardless of timezone
+    const localDate = new Date();
+    localDate.setHours(scanHour, scanMinute, 0, 0);
+    const utcScanHour = localDate.getUTCHours();
+    const utcScanMinute = localDate.getUTCMinutes();
     const { criteria, matchMode } = useCriteriaStore.getState();
     const { universe } = (await import('../store/scanStore')).useScanStore.getState();
 
@@ -34,6 +40,8 @@ export async function registerWithServer(): Promise<{ ok: boolean; message?: str
       minScore,
       minMarketCap,
       scanWeekends,
+      utcScanHour,
+      utcScanMinute,
       criteriaWeights,
       scanHour,
       scanMinute,
