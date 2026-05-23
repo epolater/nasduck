@@ -1,3 +1,4 @@
+import { useRef, useEffect, useCallback } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -6,25 +7,86 @@ import {
   Text,
   TouchableOpacity,
   View,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
 } from 'react-native';
 import { Stack } from 'expo-router';
 import { COLORS } from '../../constants';
 import { useSettingsStore } from '../../store/settingsStore';
 import { registerWithServer } from '../../services/serverSync';
 
+const ITEM_H = 52;
+const VISIBLE = 5; // must be odd
+const PICKER_H = ITEM_H * VISIBLE;
+
+interface WheelPickerProps {
+  values: number[];
+  selected: number;
+  format?: (v: number) => string;
+  onChange: (v: number) => void;
+}
+
+function WheelPicker({ values, selected, format, onChange }: WheelPickerProps) {
+  const ref = useRef<ScrollView>(null);
+  const selectedIndex = values.indexOf(selected);
+
+  // Scroll to selected on mount and when selected changes externally
+  useEffect(() => {
+    const idx = values.indexOf(selected);
+    if (idx >= 0) {
+      ref.current?.scrollTo({ y: idx * ITEM_H, animated: false });
+    }
+  }, [selected, values]);
+
+  const handleScrollEnd = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const y = e.nativeEvent.contentOffset.y;
+    const idx = Math.round(y / ITEM_H);
+    const clamped = Math.max(0, Math.min(values.length - 1, idx));
+    if (values[clamped] !== selected) onChange(values[clamped]);
+  }, [values, selected, onChange]);
+
+  const pad = Math.floor(VISIBLE / 2) * ITEM_H;
+
+  return (
+    <View style={styles.wheel}>
+      {/* Selection highlight */}
+      <View style={styles.wheelHighlight} pointerEvents="none" />
+      <ScrollView
+        ref={ref}
+        style={{ flex: 1 }}
+        showsVerticalScrollIndicator={false}
+        snapToInterval={ITEM_H}
+        decelerationRate="fast"
+        contentContainerStyle={{ paddingVertical: pad }}
+        onMomentumScrollEnd={handleScrollEnd}
+        scrollEventThrottle={16}
+      >
+        {values.map((v, i) => {
+          const isSelected = v === selected;
+          return (
+            <View key={v} style={styles.wheelItem}>
+              <Text style={[styles.wheelText, isSelected && styles.wheelTextSelected]}>
+                {format ? format(v) : String(v).padStart(2, '0')}
+              </Text>
+            </View>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+}
+
+const HOURS = Array.from({ length: 24 }, (_, i) => i);
+const MINUTES = Array.from({ length: 60 }, (_, i) => i);
+
 export default function ScanScreen() {
   const { scanHour, scanMinute, minChangePct, serverRegistered, save } = useSettingsStore();
-
-  const hourOptions = Array.from({ length: 24 }, (_, i) => i);
-  const minuteOptions = [0, 15, 30, 45];
 
   const timeLabel = `${String(scanHour).padStart(2, '0')}:${String(scanMinute).padStart(2, '0')}`;
 
   async function handleScanTimeChange(hour: number, minute: number) {
     await save({ scanHour: hour, scanMinute: minute });
-    if (serverRegistered) {
-      registerWithServer().catch(() => {});
-    }
+    if (serverRegistered) registerWithServer().catch(() => {});
   }
 
   return (
@@ -37,39 +99,24 @@ export default function ScanScreen() {
         <Text style={styles.sectionDesc}>
           {serverRegistered
             ? 'Server scans automatically at this time (US Eastern, weekdays). App will be notified with results.'
-            : 'The app will auto-scan when opened at or after this time each day. A reminder notification is also sent.'}
+            : 'The app will auto-scan when opened at or after this time each day.'}
         </Text>
-        <Text style={styles.timeDisplay}>{timeLabel}</Text>
 
-        <Text style={styles.subLabel}>Hour</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pickerRow}>
-          {hourOptions.map((h) => (
-            <TouchableOpacity
-              key={h}
-              style={[styles.pickerChip, scanHour === h && styles.pickerChipActive]}
-              onPress={() => handleScanTimeChange(h, scanMinute)}
-            >
-              <Text style={[styles.pickerChipText, scanHour === h && styles.pickerChipTextActive]}>
-                {String(h).padStart(2, '0')}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-
-        <Text style={styles.subLabel}>Minute</Text>
-        <View style={styles.minuteRow}>
-          {minuteOptions.map((m) => (
-            <TouchableOpacity
-              key={m}
-              style={[styles.pickerChip, scanMinute === m && styles.pickerChipActive]}
-              onPress={() => handleScanTimeChange(scanHour, m)}
-            >
-              <Text style={[styles.pickerChipText, scanMinute === m && styles.pickerChipTextActive]}>
-                :{String(m).padStart(2, '0')}
-              </Text>
-            </TouchableOpacity>
-          ))}
+        <View style={styles.pickerContainer}>
+          <WheelPicker
+            values={HOURS}
+            selected={scanHour}
+            onChange={(h) => handleScanTimeChange(h, scanMinute)}
+          />
+          <Text style={styles.colon}>:</Text>
+          <WheelPicker
+            values={MINUTES}
+            selected={scanMinute}
+            onChange={(m) => handleScanTimeChange(scanHour, m)}
+          />
         </View>
+
+        <Text style={styles.timeLabel}>{timeLabel} ET</Text>
 
         <View style={styles.divider} />
 
@@ -107,23 +154,62 @@ const styles = StyleSheet.create({
     color: COLORS.textMuted, fontSize: 10, fontWeight: '700',
     letterSpacing: 1.5, marginBottom: 6,
   },
-  sectionDesc: { color: COLORS.textSecondary, fontSize: 13, marginBottom: 10, lineHeight: 18 },
-  divider: { height: 1, backgroundColor: COLORS.border, marginVertical: 20 },
-  timeDisplay: {
-    color: COLORS.primary, fontSize: 40, fontWeight: '800',
-    textAlign: 'center', marginVertical: 8,
+  sectionDesc: { color: COLORS.textSecondary, fontSize: 13, marginBottom: 16, lineHeight: 18 },
+  divider: { height: 1, backgroundColor: COLORS.border, marginVertical: 24 },
+
+  pickerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: PICKER_H,
+    marginBottom: 10,
+  },
+  wheel: {
+    width: 90,
+    height: PICKER_H,
+    overflow: 'hidden',
+  },
+  wheelHighlight: {
+    position: 'absolute',
+    top: ITEM_H * Math.floor(VISIBLE / 2),
+    left: 0, right: 0,
+    height: ITEM_H,
+    backgroundColor: COLORS.surfaceAlt,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.primary + '55',
+    zIndex: 1,
+  },
+  wheelItem: {
+    height: ITEM_H,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  wheelText: {
+    color: COLORS.textMuted,
+    fontSize: 28,
+    fontWeight: '600',
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
-  subLabel: { color: COLORS.textMuted, fontSize: 10, fontWeight: '700', letterSpacing: 1, marginTop: 12, marginBottom: 6 },
-  pickerRow: { flexDirection: 'row' },
-  minuteRow: { flexDirection: 'row', gap: 10 },
-  pickerChip: {
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, marginRight: 8,
-    backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border,
+  wheelTextSelected: {
+    color: COLORS.primary,
+    fontSize: 34,
+    fontWeight: '800',
   },
-  pickerChipActive: { backgroundColor: COLORS.primary + '22', borderColor: COLORS.primary },
-  pickerChipText: { color: COLORS.textSecondary, fontWeight: '600', fontSize: 13 },
-  pickerChipTextActive: { color: COLORS.primary },
+  colon: {
+    color: COLORS.primary,
+    fontSize: 36,
+    fontWeight: '800',
+    marginHorizontal: 8,
+    marginBottom: 4,
+  },
+  timeLabel: {
+    color: COLORS.textMuted,
+    fontSize: 12,
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+
   stepperRow: {
     flexDirection: 'row', alignItems: 'center', gap: 16,
     marginBottom: 8, alignSelf: 'flex-start',
