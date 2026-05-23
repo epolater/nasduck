@@ -93,3 +93,17 @@ export async function getCloudScanStatus(): Promise<{ data: CloudScanStatus | nu
     return { data: null, error: msg };
   }
 }
+
+// Wake up the server with retries — Render free tier cold start takes up to 30s
+export async function wakeupServer(): Promise<boolean> {
+  const deviceId = getDeviceId();
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      await axios.get(`${CLOUD_SERVER_URL}/status/${deviceId}`, { timeout: 35000 });
+      return true;
+    } catch {
+      if (attempt < 5) await new Promise(r => setTimeout(r, 8000));
+    }
+  }
+  return false;
+}

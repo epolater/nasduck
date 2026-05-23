@@ -13,7 +13,7 @@ import { useScanStore } from '../store/scanStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useSignalsStore } from '../store/signalsStore';
 import * as Notifications from 'expo-notifications';
-import { registerWithServer, getCloudScanStatus } from '../services/serverSync';
+import { registerWithServer, getCloudScanStatus, wakeupServer } from '../services/serverSync';
 
 // Handle incoming notifications — used to wake up server when silent ping fires
 Notifications.setNotificationHandler({
@@ -22,19 +22,17 @@ Notifications.setNotificationHandler({
     if (isServerWakeup) {
       const { serverRegistered } = useSettingsStore.getState();
       if (serverRegistered) {
-        // Ping server — checkMissedScan fires on server side and starts the scan.
-        // After a short delay, check status again; if scan started, emit an event
-        // so the signals screen can begin polling for live progress.
-        getCloudScanStatus().then(() => {
+        // Wake server with retries (Render cold start ~30s), then check if scan started
+        wakeupServer().then((ok) => {
+          if (!ok) return;
           setTimeout(() => {
             getCloudScanStatus().then(({ data }) => {
               if (data?.scanning) {
-                // Broadcast so index.tsx can pick up live progress
                 serverWakeupEmitter.emit('scanStarted');
               }
             }).catch(() => {});
           }, 5000);
-        }).catch(() => {});
+        });
       }
     }
     return {
