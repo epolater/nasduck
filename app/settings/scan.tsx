@@ -178,7 +178,6 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1,
     borderColor: COLORS.primary + '55',
-    zIndex: 1,
   },
   wheelItem: {
     height: ITEM_H,
