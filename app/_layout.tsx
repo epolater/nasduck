@@ -1,7 +1,10 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
+import { EventEmitter } from 'eventemitter3';
 import { COLORS } from '../constants';
+
+export const serverWakeupEmitter = new EventEmitter();
 import { requestNotificationPermissions } from '../services/notifications';
 import { useCriteriaStore } from '../store/criteriaStore';
 import { usePortfolioStore } from '../store/portfolioStore';
@@ -17,8 +20,22 @@ Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
     const isServerWakeup = notification.request.content.data?.type === 'server_wakeup';
     if (isServerWakeup) {
-      // Ping server to wake it up — checkMissedScan will fire on the server side
-      getCloudScanStatus().catch(() => {});
+      const { serverRegistered } = useSettingsStore.getState();
+      if (serverRegistered) {
+        // Ping server — checkMissedScan fires on server side and starts the scan.
+        // After a short delay, check status again; if scan started, emit an event
+        // so the signals screen can begin polling for live progress.
+        getCloudScanStatus().then(() => {
+          setTimeout(() => {
+            getCloudScanStatus().then(({ data }) => {
+              if (data?.scanning) {
+                // Broadcast so index.tsx can pick up live progress
+                serverWakeupEmitter.emit('scanStarted');
+              }
+            }).catch(() => {});
+          }, 5000);
+        }).catch(() => {});
+      }
     }
     return {
       shouldShowAlert: !isServerWakeup,

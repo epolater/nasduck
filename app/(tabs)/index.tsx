@@ -27,6 +27,7 @@ import { abortScan, isScanDue, restartScan, runDailyScan } from '../../tasks/dai
 import * as Notifications from 'expo-notifications';
 import { triggerServerScan, stopServerScan, getCloudScanStatus, registerWithServer, getDeviceId } from '../../services/serverSync';
 import { useServerLogStore } from '../../store/serverLogStore';
+import { serverWakeupEmitter } from '../_layout';
 import { Signal } from '../../types';
 import Svg, { Path } from 'react-native-svg';
 
@@ -286,6 +287,19 @@ export default function SignalsScreen() {
 
   // Reset on unmount
   useEffect(() => () => stopCloudPolling(), []);
+
+  // Listen for server wakeup — auto-start polling if scan kicked off while app is open
+  useEffect(() => {
+    const handler = () => {
+      if (!cloudScanning) {
+        addLog('📡 Scheduled scan started — showing live progress…', 'ok');
+        setCloudScanning(true);
+        startCloudPolling();
+      }
+    };
+    serverWakeupEmitter.on('scanStarted', handler);
+    return () => { serverWakeupEmitter.off('scanStarted', handler); };
+  }, [cloudScanning]);
 
   // Push notification listener — react to scan completion notifications
   useEffect(() => {
