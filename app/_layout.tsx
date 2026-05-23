@@ -10,7 +10,39 @@ import { useScanStore } from '../store/scanStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useSignalsStore } from '../store/signalsStore';
 import * as Notifications from 'expo-notifications';
-import { registerWithServer } from '../services/serverSync';
+import { registerWithServer, getCloudScanStatus } from '../services/serverSync';
+
+// Handle incoming notifications — used to wake up server when silent ping fires
+Notifications.setNotificationHandler({
+  handleNotification: async (notification) => {
+    const isServerWakeup = notification.request.content.data?.type === 'server_wakeup';
+    if (isServerWakeup) {
+      // Ping server to wake it up — checkMissedScan will fire on the server side
+      getCloudScanStatus().catch(() => {});
+    }
+    return {
+      shouldShowAlert: !isServerWakeup,
+      shouldPlaySound: !isServerWakeup,
+      shouldSetBadge: false,
+    };
+  },
+});
+
+async function scheduleServerWakeup(scanHour: number, scanMinute: number) {
+  await Notifications.cancelAllScheduledNotificationsAsync();
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: '',
+      body: '',
+      data: { type: 'server_wakeup' },
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DAILY,
+      hour: scanHour,
+      minute: scanMinute,
+    },
+  });
+}
 
 export default function RootLayout() {
   useEffect(() => {
@@ -28,14 +60,15 @@ export default function RootLayout() {
 
       await requestNotificationPermissions();
 
-      // Cancel any previously scheduled daily reminder notifications
-      await Notifications.cancelAllScheduledNotificationsAsync();
-
-      const { serverRegistered } = useSettingsStore.getState();
+      const { serverRegistered, scanHour, scanMinute } = useSettingsStore.getState();
 
       if (serverRegistered) {
-        // Server handles scheduling — re-register to restore after server restart
+        // Schedule a silent daily notification at scan time to wake the server
+        await scheduleServerWakeup(scanHour, scanMinute);
+        // Re-register to restore config after server restart
         registerWithServer().catch(() => {});
+      } else {
+        await Notifications.cancelAllScheduledNotificationsAsync();
       }
     }
     init();

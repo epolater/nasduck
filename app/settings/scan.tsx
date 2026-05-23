@@ -11,6 +11,7 @@ import {
   NativeScrollEvent,
 } from 'react-native';
 import { Stack } from 'expo-router';
+import * as Notifications from 'expo-notifications';
 import { COLORS } from '../../constants';
 import { useSettingsStore } from '../../store/settingsStore';
 import { registerWithServer } from '../../services/serverSync';
@@ -86,7 +87,19 @@ export default function ScanScreen() {
 
   async function handleScanTimeChange(hour: number, minute: number) {
     await save({ scanHour: hour, scanMinute: minute });
-    if (serverRegistered) registerWithServer().catch(() => {});
+    if (serverRegistered) {
+      registerWithServer().catch(() => {});
+      // Reschedule the silent wakeup notification to the new time
+      await Notifications.cancelAllScheduledNotificationsAsync();
+      await Notifications.scheduleNotificationAsync({
+        content: { title: '', body: '', data: { type: 'server_wakeup' } },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DAILY,
+          hour,
+          minute,
+        },
+      });
+    }
   }
 
   return (
