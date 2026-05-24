@@ -27,13 +27,13 @@ Notifications.setNotificationHandler({
         wakeupServer().then(async (ok) => {
           if (!ok) return;
           await registerWithServer();  // ensure device is in store after cold start
-          triggerServerScan(true).then(() => {
-            setTimeout(() => {
-              getCloudScanStatus().then(({ data }) => {
-                if (data?.scanning) serverWakeupEmitter.emit('scanStarted');
-              }).catch(() => {});
-            }, 3000);
-          }).catch(() => {});
+          await triggerServerScan(true);
+          startKeepAlive(); // keep server alive during scan
+          setTimeout(() => {
+            getCloudScanStatus().then(({ data }) => {
+              if (data?.scanning) serverWakeupEmitter.emit('scanStarted');
+            }).catch(() => {});
+          }, 3000);
         });
       }
     }
@@ -49,7 +49,7 @@ async function scheduleServerWakeup(scanHour: number, scanMinute: number) {
   await Notifications.cancelAllScheduledNotificationsAsync();
   await Notifications.scheduleNotificationAsync({
     content: {
-      title: 'Nasduck',          // non-empty so Android doesn't drop it
+      title: 'Nasduck',
       body: 'Starting scan…',
       data: { type: 'server_wakeup' },
     },
@@ -72,6 +72,28 @@ function msUntilTime(hour: number, minute: number): number {
 
 export default function RootLayout() {
   const scanTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const keepAliveRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Start pinging server every 10 min while scan is running to prevent Render from sleeping
+  function startKeepAlive() {
+    if (keepAliveRef.current) return; // already running
+    console.log('[KeepAlive] Starting keep-alive pings');
+    keepAliveRef.current = setInterval(async () => {
+      const { data } = await getCloudScanStatus().catch(() => ({ data: null }));
+      console.log(`[KeepAlive] Ping — scanning: ${data?.scanning ?? 'unknown'}`);
+      if (!data?.scanning) {
+        stopKeepAlive(); // scan finished, stop pinging
+      }
+    }, 10 * 60 * 1000); // every 10 minutes
+  }
+
+  function stopKeepAlive() {
+    if (keepAliveRef.current) {
+      clearInterval(keepAliveRef.current);
+      keepAliveRef.current = null;
+      console.log('[KeepAlive] Stopped keep-alive pings');
+    }
+  }
 
   useEffect(() => {
     async function init() {
@@ -93,13 +115,20 @@ export default function RootLayout() {
         await scheduleServerWakeup(scanHour, scanMinute);
         registerWithServer().catch(() => {});
         scheduleScanTimer(scanHour, scanMinute);
+        // If a scan is already running (e.g. app reopened mid-scan), start keep-alive immediately
+        getCloudScanStatus().then(({ data }) => {
+          if (data?.scanning) startKeepAlive();
+        }).catch(() => {});
       } else {
         await Notifications.cancelAllScheduledNotificationsAsync();
       }
     }
     init();
 
-    return () => { if (scanTimerRef.current) clearTimeout(scanTimerRef.current); };
+    return () => {
+      if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
+      stopKeepAlive();
+    };
   }, []);
 
   function scheduleScanTimer(scanHour: number, scanMinute: number) {
@@ -114,6 +143,7 @@ export default function RootLayout() {
       if (ok) {
         await registerWithServer();  // re-register in case server cold-started with empty store
         await triggerServerScan(true);
+        startKeepAlive(); // keep server alive during scan
         setTimeout(() => {
           getCloudScanStatus().then(({ data }) => {
             if (data?.scanning) serverWakeupEmitter.emit('scanStarted');
