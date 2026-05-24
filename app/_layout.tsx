@@ -3,6 +3,8 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef } from 'react';
 import { EventEmitter } from 'eventemitter3';
 import { COLORS } from '../constants';
+import * as BackgroundFetch from 'expo-background-fetch';
+import * as TaskManager from 'expo-task-manager';
 
 export const serverWakeupEmitter = new EventEmitter();
 
@@ -16,37 +18,51 @@ import { useSignalsStore } from '../store/signalsStore';
 import * as Notifications from 'expo-notifications';
 import { registerWithServer, getCloudScanStatus, wakeupServer, triggerServerScan } from '../services/serverSync';
 
-// Keep-alive interval — module-level so setNotificationHandler can access it
-let keepAliveInterval: ReturnType<typeof setInterval> | null = null;
+// ── Background task — pings server every ~15 min to keep Render alive ──
+const KEEP_ALIVE_TASK = 'nasduck-keep-alive';
 
-function startKeepAlive() {
-  if (keepAliveInterval) return;
-  console.log('[KeepAlive] Starting keep-alive pings');
-  keepAliveInterval = setInterval(async () => {
+TaskManager.defineTask(KEEP_ALIVE_TASK, async () => {
+  try {
+    const { serverRegistered } = useSettingsStore.getState();
+    if (!serverRegistered) return BackgroundFetch.BackgroundFetchResult.NoData;
     const { data } = await getCloudScanStatus().catch(() => ({ data: null }));
-    console.log(`[KeepAlive] Ping — scanning: ${data?.scanning ?? 'unknown'}`);
-    if (!data?.scanning) stopKeepAlive();
-  }, 10 * 60 * 1000); // every 10 minutes
+    console.log(`[KeepAlive BG] Ping — scanning: ${data?.scanning ?? 'unknown'}`);
+    return BackgroundFetch.BackgroundFetchResult.NewData;
+  } catch {
+    return BackgroundFetch.BackgroundFetchResult.Failed;
+  }
+});
+
+async function registerKeepAliveTask() {
+  const status = await BackgroundFetch.getStatusAsync();
+  if (status === BackgroundFetch.BackgroundFetchStatus.Restricted ||
+      status === BackgroundFetch.BackgroundFetchStatus.Denied) {
+    console.log('[KeepAlive BG] Background fetch not available');
+    return;
+  }
+  const isRegistered = await TaskManager.isTaskRegisteredAsync(KEEP_ALIVE_TASK);
+  if (!isRegistered) {
+    await BackgroundFetch.registerTaskAsync(KEEP_ALIVE_TASK, {
+      minimumInterval: 10 * 60, // 10 minutes (OS may run less frequently)
+      stopOnTerminate: false,
+      startOnBoot: true,
+    });
+    console.log('[KeepAlive BG] Background task registered');
+  }
 }
 
-function stopKeepAlive() {
-  if (keepAliveInterval) {
-    clearInterval(keepAliveInterval);
-    keepAliveInterval = null;
-    console.log('[KeepAlive] Stopped keep-alive pings');
+async function unregisterKeepAliveTask() {
+  const isRegistered = await TaskManager.isTaskRegisteredAsync(KEEP_ALIVE_TASK);
+  if (isRegistered) {
+    await BackgroundFetch.unregisterTaskAsync(KEEP_ALIVE_TASK);
+    console.log('[KeepAlive BG] Background task unregistered');
   }
 }
 
 // Handles all push notifications — runs in background too
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
-    const title = notification.request.content.title ?? '';
     const isServerWakeup = notification.request.content.data?.type === 'server_wakeup';
-
-    // Start keep-alive when scan started notification arrives (works in background)
-    if (title.includes('Scan started')) {
-      startKeepAlive();
-    }
 
     // Background wakeup: phone wakes server and triggers scan
     if (isServerWakeup) {
@@ -56,7 +72,6 @@ Notifications.setNotificationHandler({
           if (!ok) return;
           await registerWithServer();
           await triggerServerScan(true);
-          startKeepAlive();
           setTimeout(() => {
             getCloudScanStatus().then(({ data }) => {
               if (data?.scanning) serverWakeupEmitter.emit('scanStarted');
@@ -122,19 +137,16 @@ export default function RootLayout() {
         await scheduleServerWakeup(scanHour, scanMinute);
         registerWithServer().catch(() => {});
         scheduleScanTimer(scanHour, scanMinute);
-        // If scan already running when app opens, start keep-alive immediately
-        getCloudScanStatus().then(({ data }) => {
-          if (data?.scanning) startKeepAlive();
-        }).catch(() => {});
+        await registerKeepAliveTask();
       } else {
         await Notifications.cancelAllScheduledNotificationsAsync();
+        await unregisterKeepAliveTask();
       }
     }
     init();
 
     return () => {
       if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
-      stopKeepAlive();
     };
   }, []);
 
@@ -150,7 +162,6 @@ export default function RootLayout() {
       if (ok) {
         await registerWithServer();
         await triggerServerScan(true);
-        startKeepAlive();
         setTimeout(() => {
           getCloudScanStatus().then(({ data }) => {
             if (data?.scanning) serverWakeupEmitter.emit('scanStarted');
