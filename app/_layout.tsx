@@ -16,15 +16,79 @@ import { useSignalsStore } from '../store/signalsStore';
 import * as Notifications from 'expo-notifications';
 import { registerWithServer, getCloudScanStatus, wakeupServer, triggerServerScan } from '../services/serverSync';
 
-// Show all push notifications from server immediately
+// Keep-alive interval — module-level so setNotificationHandler can access it
+let keepAliveInterval: ReturnType<typeof setInterval> | null = null;
+
+function startKeepAlive() {
+  if (keepAliveInterval) return;
+  console.log('[KeepAlive] Starting keep-alive pings');
+  keepAliveInterval = setInterval(async () => {
+    const { data } = await getCloudScanStatus().catch(() => ({ data: null }));
+    console.log(`[KeepAlive] Ping — scanning: ${data?.scanning ?? 'unknown'}`);
+    if (!data?.scanning) stopKeepAlive();
+  }, 10 * 60 * 1000); // every 10 minutes
+}
+
+function stopKeepAlive() {
+  if (keepAliveInterval) {
+    clearInterval(keepAliveInterval);
+    keepAliveInterval = null;
+    console.log('[KeepAlive] Stopped keep-alive pings');
+  }
+}
+
+// Handles all push notifications — runs in background too
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
+  handleNotification: async (notification) => {
+    const title = notification.request.content.title ?? '';
+    const isServerWakeup = notification.request.content.data?.type === 'server_wakeup';
+
+    // Start keep-alive when scan started notification arrives (works in background)
+    if (title.includes('Scan started')) {
+      startKeepAlive();
+    }
+
+    // Background wakeup: phone wakes server and triggers scan
+    if (isServerWakeup) {
+      const { serverRegistered } = useSettingsStore.getState();
+      if (serverRegistered) {
+        wakeupServer().then(async (ok) => {
+          if (!ok) return;
+          await registerWithServer();
+          await triggerServerScan(true);
+          startKeepAlive();
+          setTimeout(() => {
+            getCloudScanStatus().then(({ data }) => {
+              if (data?.scanning) serverWakeupEmitter.emit('scanStarted');
+            }).catch(() => {});
+          }, 3000);
+        });
+      }
+    }
+
+    return {
+      shouldShowAlert: !isServerWakeup,
+      shouldPlaySound: !isServerWakeup,
+      shouldSetBadge: false,
+    };
+  },
 });
 
+async function scheduleServerWakeup(scanHour: number, scanMinute: number) {
+  await Notifications.cancelAllScheduledNotificationsAsync();
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: 'Nasduck',
+      body: 'Starting scan…',
+      data: { type: 'server_wakeup' },
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DAILY,
+      hour: scanHour,
+      minute: scanMinute,
+    },
+  });
+}
 
 // Returns ms until the next occurrence of hour:minute (today or tomorrow)
 function msUntilTime(hour: number, minute: number): number {
@@ -37,28 +101,6 @@ function msUntilTime(hour: number, minute: number): number {
 
 export default function RootLayout() {
   const scanTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const keepAliveRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Start pinging server every 10 min while scan is running to prevent Render from sleeping
-  function startKeepAlive() {
-    if (keepAliveRef.current) return; // already running
-    console.log('[KeepAlive] Starting keep-alive pings');
-    keepAliveRef.current = setInterval(async () => {
-      const { data } = await getCloudScanStatus().catch(() => ({ data: null }));
-      console.log(`[KeepAlive] Ping — scanning: ${data?.scanning ?? 'unknown'}`);
-      if (!data?.scanning) {
-        stopKeepAlive(); // scan finished, stop pinging
-      }
-    }, 10 * 60 * 1000); // every 10 minutes
-  }
-
-  function stopKeepAlive() {
-    if (keepAliveRef.current) {
-      clearInterval(keepAliveRef.current);
-      keepAliveRef.current = null;
-      console.log('[KeepAlive] Stopped keep-alive pings');
-    }
-  }
 
   useEffect(() => {
     async function init() {
@@ -77,10 +119,10 @@ export default function RootLayout() {
       const { serverRegistered, scanHour, scanMinute } = useSettingsStore.getState();
 
       if (serverRegistered) {
-        await Notifications.cancelAllScheduledNotificationsAsync(); // clear any old wakeup notifications
+        await scheduleServerWakeup(scanHour, scanMinute);
         registerWithServer().catch(() => {});
         scheduleScanTimer(scanHour, scanMinute);
-        // If a scan is already running (e.g. app reopened mid-scan), start keep-alive immediately
+        // If scan already running when app opens, start keep-alive immediately
         getCloudScanStatus().then(({ data }) => {
           if (data?.scanning) startKeepAlive();
         }).catch(() => {});
@@ -90,18 +132,9 @@ export default function RootLayout() {
     }
     init();
 
-    // Start keep-alive when server push notification arrives saying scan started
-    const notifListener = Notifications.addNotificationReceivedListener((notification) => {
-      const title = notification.request.content.title ?? '';
-      if (title.includes('Scan started') || title.includes('scan started')) {
-        startKeepAlive();
-      }
-    });
-
     return () => {
       if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
       stopKeepAlive();
-      notifListener.remove();
     };
   }, []);
 
@@ -115,9 +148,9 @@ export default function RootLayout() {
       console.log('[ScanTimer] Scan time reached — waking server and triggering scan');
       const ok = await wakeupServer();
       if (ok) {
-        await registerWithServer();  // re-register in case server cold-started with empty store
+        await registerWithServer();
         await triggerServerScan(true);
-        startKeepAlive(); // keep server alive during scan
+        startKeepAlive();
         setTimeout(() => {
           getCloudScanStatus().then(({ data }) => {
             if (data?.scanning) serverWakeupEmitter.emit('scanStarted');
