@@ -23,9 +23,10 @@ Notifications.setNotificationHandler({
     if (isServerWakeup) {
       const { serverRegistered } = useSettingsStore.getState();
       if (serverRegistered) {
-        // Wake server with retries, then trigger scan directly
-        wakeupServer().then((ok) => {
+        // Wake server with retries, re-register (store may be empty after cold start), then trigger scan
+        wakeupServer().then(async (ok) => {
           if (!ok) return;
+          await registerWithServer();  // ensure device is in store after cold start
           triggerServerScan(true).then(() => {
             setTimeout(() => {
               getCloudScanStatus().then(({ data }) => {
@@ -111,6 +112,7 @@ export default function RootLayout() {
       console.log('[ScanTimer] Scan time reached — waking server and triggering scan');
       const ok = await wakeupServer();
       if (ok) {
+        await registerWithServer();  // re-register in case server cold-started with empty store
         await triggerServerScan(true);
         setTimeout(() => {
           getCloudScanStatus().then(({ data }) => {
