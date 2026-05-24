@@ -43,7 +43,7 @@ async function registerKeepAliveTask() {
   const isRegistered = await TaskManager.isTaskRegisteredAsync(KEEP_ALIVE_TASK);
   if (!isRegistered) {
     await BackgroundFetch.registerTaskAsync(KEEP_ALIVE_TASK, {
-      minimumInterval: 10 * 60, // 10 minutes (OS may run less frequently)
+      minimumInterval: 60, // 1 minute for testing
       stopOnTerminate: false,
       startOnBoot: true,
     });
