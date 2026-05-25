@@ -1,4 +1,5 @@
 import * as Notifications from 'expo-notifications';
+import { Platform } from 'react-native';
 import { CRITERIA_WEIGHTS, RATE_LIMIT_MS, UNIVERSE_MIN_PRICE, UNIVERSE_MIN_VOLUME } from '../constants';
 import { delay, fetchCandles, fetchMarketCap, fetchNasdaqSymbols, fetchQuote, getApiKey } from '../services/finnhub';
 import { fetchOptionsData } from '../services/options';
@@ -9,6 +10,41 @@ import { useSettingsStore } from '../store/settingsStore';
 import { useSignalsStore } from '../store/signalsStore';
 import { Signal, ScanUniverseStock } from '../types';
 import { evaluateCriteria, meetsUniverseFilter } from '../utils/technicalAnalysis';
+
+// Foreground service — keeps Android from killing the app during long scans
+let ForegroundService: any = null;
+if (Platform.OS === 'android') {
+  ForegroundService = require('@supersami/rn-foreground-service').default;
+}
+
+async function startForegroundService(total: number) {
+  if (!ForegroundService) return;
+  try {
+    await ForegroundService.startService({
+      id: 1,
+      title: 'Nasduck — Scanning',
+      message: `Scanning 0/${total} stocks…`,
+      importance: 2,
+      serviceType: 'dataSync',
+    });
+  } catch (e) { console.log('[FG] Start error:', e); }
+}
+
+async function updateForegroundService(current: number, total: number, signals: number) {
+  if (!ForegroundService) return;
+  try {
+    await ForegroundService.updateNotification({
+      id: 1,
+      title: 'Nasduck — Scanning',
+      message: `Scanning ${current}/${total} stocks… ${signals} signals`,
+    });
+  } catch (_) {}
+}
+
+async function stopForegroundService() {
+  if (!ForegroundService) return;
+  try { await ForegroundService.stopService(); } catch (_) {}
+}
 
 let scanAbortFlag = false;
 let universeBuildAbortFlag = false;
@@ -114,6 +150,7 @@ async function _runDailyScanCore(): Promise<void> {
   }
 
   setScanStatus('scanning', startFrom, targets.length);
+  await startForegroundService(targets.length);
 
   const to = Math.floor(Date.now() / 1000);
   const from = to - 86400 * 260;
@@ -126,11 +163,16 @@ async function _runDailyScanCore(): Promise<void> {
       await saveResumeIndex(i);
       await persist();
       setScanStatus('idle');
+      await stopForegroundService();
       return;
     }
 
     const stock = targets[i];
     setScanStatus('scanning', i + 1, targets.length);
+    if (i % 50 === 0) {
+      const signalCount = useSignalsStore.getState().signals.length;
+      await updateForegroundService(i + 1, targets.length, signalCount);
+    }
     const [candles, stockMarketCap] = await Promise.all([
       fetchCandles(stock.symbol, 'D', from, to),
       marketCapFilterEnabled ? fetchMarketCap(stock.symbol) : Promise.resolve(null),
@@ -140,6 +182,7 @@ async function _runDailyScanCore(): Promise<void> {
       await saveResumeIndex(i);
       await persist();
       setScanStatus('idle');
+      await stopForegroundService();
       return;
     }
 
@@ -279,6 +322,7 @@ async function _runDailyScanCore(): Promise<void> {
   await persist(); // flush all signals to storage
   await clearResumeIndex();
   markScanComplete();
+  await stopForegroundService();
 
   const { signals } = useSignalsStore.getState();
   if (signals.length > 0) await sendScanNotification(signals);
