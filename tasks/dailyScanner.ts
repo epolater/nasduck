@@ -15,6 +15,8 @@ import { evaluateCriteria, meetsUniverseFilter } from '../utils/technicalAnalysi
 let ForegroundService: any = null;
 if (Platform.OS === 'android') {
   ForegroundService = require('@supersami/rn-foreground-service').default;
+  // Must register a task at module level before starting the service
+  ForegroundService.registerForegroundTask('nasduckScanTask', async () => {});
 }
 
 async function startForegroundService(total: number) {
@@ -24,8 +26,8 @@ async function startForegroundService(total: number) {
       id: 1,
       title: 'Nasduck — Scanning',
       message: `Scanning 0/${total} stocks…`,
-      importance: 2,
-      serviceType: 'dataSync',
+      importance: 'default',
+      ServiceType: 'dataSync',
     });
   } catch (e) { console.log('[FG] Start error:', e); }
 }
@@ -37,13 +39,14 @@ async function updateForegroundService(current: number, total: number, signals: 
       id: 1,
       title: 'Nasduck — Scanning',
       message: `Scanning ${current}/${total} stocks… ${signals} signals`,
+      ServiceType: 'dataSync',
     });
   } catch (_) {}
 }
 
 async function stopForegroundService() {
   if (!ForegroundService) return;
-  try { await ForegroundService.stopService(); } catch (_) {}
+  try { await ForegroundService.stopServiceAll(); } catch (_) {}
 }
 
 let scanAbortFlag = false;
