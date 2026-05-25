@@ -54,7 +54,8 @@
           "sounds": []
         }
       ],
-      "expo-background-fetch"
+      "expo-background-fetch",
+      "./plugins/foreground-service-plugin"
     ],
     "scheme": "nasduck",
     "extra": {

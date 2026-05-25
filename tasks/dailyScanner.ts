@@ -14,39 +14,38 @@ import { evaluateCriteria, meetsUniverseFilter } from '../utils/technicalAnalysi
 // Foreground service — keeps Android from killing the app during long scans
 let ForegroundService: any = null;
 if (Platform.OS === 'android') {
-  ForegroundService = require('@supersami/rn-foreground-service').default;
-  // Must register a task at module level before starting the service
-  ForegroundService.registerForegroundTask('nasduckScanTask', async () => {});
+  ForegroundService = (require('@supersami/rn-foreground-service') as any).default;
 }
 
 async function startForegroundService(total: number) {
   if (!ForegroundService) return;
   try {
-    await ForegroundService.startService({
+    await ForegroundService.start({
       id: 1,
       title: 'Nasduck — Scanning',
       message: `Scanning 0/${total} stocks…`,
       importance: 'default',
       ServiceType: 'dataSync',
+      number: '0',
     });
+    console.log('[FG] Foreground service started');
   } catch (e) { console.log('[FG] Start error:', e); }
 }
 
 async function updateForegroundService(current: number, total: number, signals: number) {
   if (!ForegroundService) return;
   try {
-    await ForegroundService.updateNotification({
+    await ForegroundService.update({
       id: 1,
       title: 'Nasduck — Scanning',
       message: `Scanning ${current}/${total} stocks… ${signals} signals`,
-      ServiceType: 'dataSync',
     });
   } catch (_) {}
 }
 
 async function stopForegroundService() {
   if (!ForegroundService) return;
-  try { await ForegroundService.stopServiceAll(); } catch (_) {}
+  try { await ForegroundService.stopAll(); } catch (_) {}
 }
 
 let scanAbortFlag = false;
