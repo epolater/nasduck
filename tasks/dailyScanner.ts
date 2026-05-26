@@ -133,7 +133,7 @@ export async function buildUniverse(): Promise<boolean> {
       })
       .filter(s => {
         if (minCapBytes === 0) return true;
-        if (s.marketCap === null) return true; // keep if unknown
+        if (s.marketCap === null) return false; // exclude if market cap unknown when filter is active
         return s.marketCap >= minCapBytes;
       });
 
