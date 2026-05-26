@@ -135,3 +135,37 @@ export async function validateApiKey(key: string): Promise<boolean> {
 export function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
+
+// Bulk fetch market cap + name from Yahoo Finance for a list of symbols
+// Returns a map of symbol → { marketCap, name }
+export async function fetchYahooBulkQuotes(
+  symbols: string[],
+  onProgress?: (done: number, total: number) => void,
+): Promise<Map<string, { marketCap: number | null; name: string }>> {
+  const result = new Map<string, { marketCap: number | null; name: string }>();
+  const BATCH = 100;
+
+  for (let i = 0; i < symbols.length; i += BATCH) {
+    const batch = symbols.slice(i, i + BATCH);
+    try {
+      const joined = batch.join(',');
+      const { data } = await axios.get(
+        `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${joined}&fields=symbol,shortName,regularMarketCap`,
+        { timeout: 15000 },
+      );
+      const quotes: any[] = data?.quoteResponse?.result ?? [];
+      for (const q of quotes) {
+        result.set(q.symbol, {
+          marketCap: typeof q.regularMarketCap === 'number' ? q.regularMarketCap : null,
+          name: q.shortName ?? q.symbol,
+        });
+      }
+    } catch (_) {
+      // batch failed — skip, symbols won't appear in result
+    }
+    onProgress?.(Math.min(i + BATCH, symbols.length), symbols.length);
+    if (i + BATCH < symbols.length) await delay(300); // gentle rate limiting
+  }
+
+  return result;
+}

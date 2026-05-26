@@ -1,7 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import { CRITERIA_WEIGHTS, RATE_LIMIT_MS, UNIVERSE_MIN_PRICE, UNIVERSE_MIN_VOLUME } from '../constants';
-import { delay, fetchCandles, fetchNasdaqSymbols, fetchQuote, getApiKey } from '../services/finnhub';
+import { delay, fetchCandles, fetchNasdaqSymbols, fetchYahooBulkQuotes, fetchQuote, getApiKey } from '../services/finnhub';
 import { fetchOptionsData } from '../services/options';
 import { useCriteriaStore } from '../store/criteriaStore';
 import { usePortfolioStore } from '../store/portfolioStore';
@@ -106,12 +106,43 @@ export async function buildUniverse(): Promise<boolean> {
   universeBuildAbortFlag = false;
 
   try {
+    // Step 1: get all NASDAQ symbols from Finnhub (~1 API call)
     setUniverseBuildStatus('running', 0, 0);
-    const stocks = await fetchNasdaqSymbols();
-    await setUniverse(stocks);
+    const allStocks = await fetchNasdaqSymbols();
+    console.log(`[Universe] Fetched ${allStocks.length} symbols from Finnhub`);
+
+    // Step 2: bulk fetch market cap from Yahoo Finance (~30 requests for 3000 stocks)
+    const symbols = allStocks.map(s => s.symbol);
+    const yahooData = await fetchYahooBulkQuotes(symbols, (done, total) => {
+      setUniverseBuildStatus('running', done, total);
+    });
+    console.log(`[Universe] Yahoo bulk fetch complete: ${yahooData.size} quotes received`);
+
+    // Step 3: filter by minMarketCap and enrich names from Yahoo
+    const { minMarketCap } = useSettingsStore.getState();
+    const minCapBytes = minMarketCap > 0 ? minMarketCap * 1_000_000_000 : 0;
+
+    const filtered = allStocks
+      .map(s => {
+        const yahoo = yahooData.get(s.symbol);
+        return {
+          symbol: s.symbol,
+          name: yahoo?.name ?? s.name,
+          marketCap: yahoo?.marketCap ?? null,
+        };
+      })
+      .filter(s => {
+        if (minCapBytes === 0) return true;
+        if (s.marketCap === null) return true; // keep if unknown
+        return s.marketCap >= minCapBytes;
+      });
+
+    console.log(`[Universe] After market cap filter (>${minMarketCap}B): ${filtered.length} stocks`);
+
+    await setUniverse(filtered.map(s => ({ symbol: s.symbol, name: s.name })));
     setUniverseBuildStatus('idle');
     return true;
-  } catch (_) {
+  } catch (e: any) {
     setUniverseBuildStatus('error', 0, 0, 'Failed to fetch symbols. Check your API key.');
     return false;
   }
