@@ -85,19 +85,6 @@ export function abortUniverseBuild() {
   universeBuildAbortFlag = true;
 }
 
-async function interruptibleDelay(ms: number): Promise<void> {
-  const start = Date.now();
-  const end = start + ms;
-  while (Date.now() < end) {
-    if (scanAbortFlag) return;
-    await delay(Math.min(100, end - Date.now()));
-  }
-  const actual = Date.now() - start;
-  if (actual > ms + 2000) {
-    console.warn(`[SCAN] delay frozen for ${actual - ms}ms (expected ${ms}ms) — JS thread was paused`);
-  }
-}
-
 function buildTargets(): ScanUniverseStock[] {
   const { universe, skipList } = useScanStore.getState();
   const { enabledBuyCriteria, enabledSellCriteria } = useCriteriaStore.getState();
@@ -142,98 +129,152 @@ export async function buildUniverse(): Promise<boolean> {
   }
 }
 
+// ── Scan loop state — held outside any closure so each headless-task tick can
+//    pick up where the previous one left off ────────────────────────────────
+type ScanCtx = {
+  targets: ScanUniverseStock[];
+  portfolioSymbols: Set<string>;
+  from: number;
+  to: number;
+  marketCapFilterEnabled: boolean;
+  minMarketCap: number;
+  minChangePct: number;
+  failedFilter: string[];
+  i: number;
+  isRunning: boolean; // reentrancy guard — taskRunner fires every 500ms
+};
+
+let scanCtx: ScanCtx | null = null;
+const SCAN_TASK_ID = 'nasduck-scan';
+
 export async function runDailyScan(): Promise<void> {
-  await _runDailyScanCore();
-}
-
-async function _runDailyScanCore(): Promise<void> {
-
   scanAbortFlag = false;
 
   const { stocks: portfolioStocks } = usePortfolioStore.getState();
-  const { setScanStatus, incrementScanCounters, markScanComplete, addToSkipList, saveResumeIndex, clearResumeIndex, resumeIndex } = useScanStore.getState();
-  const { addSignal, persist, clear } = useSignalsStore.getState();
+  const { setScanStatus } = useScanStore.getState();
+  const { clear } = useSignalsStore.getState();
   const { minChangePct, minMarketCap } = useSettingsStore.getState();
 
-  // Read criteria fresh right now (not captured as a stale snapshot)
   const buyCriteria = useCriteriaStore.getState().enabledBuyCriteria();
   const sellCriteria = useCriteriaStore.getState().enabledSellCriteria();
 
   if (buyCriteria.length === 0 && sellCriteria.length === 0) return;
   if (useScanStore.getState().universe.stocks.length === 0) return;
 
-  const portfolioSymbols = new Set(portfolioStocks.map((s) => s.symbol));
   const targets = buildTargets();
-
-  // If starting fresh (no resume), clear previous signals and reset counters
+  const { resumeIndex } = useScanStore.getState();
   const startFrom = resumeIndex ?? 0;
+
   if (startFrom === 0) {
     await clear();
-    setScanStatus('scanning', 0, targets.length); // resets counters to 0
+    setScanStatus('scanning', 0, targets.length);
     useScanStore.setState((s) => ({
       scan: { ...s.scan, evaluated: 0, noData: 0, filtered: 0 },
     }));
   }
 
   setScanStatus('scanning', startFrom, targets.length);
+
+  scanCtx = {
+    targets,
+    portfolioSymbols: new Set(portfolioStocks.map((s) => s.symbol)),
+    from: Math.floor(Date.now() / 1000) - 86400 * 260,
+    to: Math.floor(Date.now() / 1000),
+    marketCapFilterEnabled: minMarketCap > 0,
+    minMarketCap,
+    minChangePct,
+    failedFilter: [],
+    i: startFrom,
+    isRunning: false,
+  };
+
   await startForegroundService(startFrom, targets.length);
 
-  const to = Math.floor(Date.now() / 1000);
-  const from = to - 86400 * 260;
+  if (ForegroundService) {
+    try {
+      // Remove any leftover task from a previous run
+      ForegroundService.remove_task(SCAN_TASK_ID);
+    } catch (_) {}
+    try {
+      ForegroundService.add_task(scanOneIteration, {
+        delay: RATE_LIMIT_MS,
+        onLoop: true,
+        taskId: SCAN_TASK_ID,
+        onError: (e: any) => console.log('[SCAN] task error', e),
+      });
+      console.log(`[SCAN] add_task registered — looping every ${RATE_LIMIT_MS}ms`);
+    } catch (e) {
+      console.log('[SCAN] add_task failed', e);
+    }
+  } else {
+    // iOS / dev fallback — run synchronously
+    while (scanCtx && !scanAbortFlag && scanCtx.i < scanCtx.targets.length) {
+      await scanOneIteration();
+      await delay(RATE_LIMIT_MS);
+    }
+    await finalizeScan();
+  }
+}
 
-  const failedFilter: string[] = [];
-  const marketCapFilterEnabled = minMarketCap > 0;
+async function scanOneIteration(): Promise<void> {
+  const ctx = scanCtx;
+  if (!ctx) return;
+  if (ctx.isRunning) return; // taskRunner ticks every 500ms; skip if previous still in flight
+  ctx.isRunning = true;
 
-  for (let i = startFrom; i < targets.length; i++) {
+  try {
     if (scanAbortFlag) {
-      await saveResumeIndex(i);
-      await persist();
-      setScanStatus('idle');
-      await stopForegroundService();
+      const { saveResumeIndex } = useScanStore.getState();
+      await saveResumeIndex(ctx.i);
+      await useSignalsStore.getState().persist();
+      useScanStore.getState().setScanStatus('idle');
+      await teardownScanTask();
       return;
     }
 
-    const stock = targets[i];
-    setScanStatus('scanning', i + 1, targets.length);
+    if (ctx.i >= ctx.targets.length) {
+      await finalizeScan();
+      return;
+    }
+
+    console.log(`[SCAN] tick i=${ctx.i}/${ctx.targets.length}`);
+
+    const { incrementScanCounters, setScanStatus } = useScanStore.getState();
+    const { addSignal } = useSignalsStore.getState();
+    const stock = ctx.targets[ctx.i];
+
+    setScanStatus('scanning', ctx.i + 1, ctx.targets.length);
     const signalCount = useSignalsStore.getState().signals.length;
-    await updateForegroundService(i + 1, targets.length, signalCount);
-    const fetchStart = Date.now();
-    const candles = await fetchCandles(stock.symbol, 'D', from, to);
-    const fetchMs = Date.now() - fetchStart;
-    if (fetchMs > 15000) console.warn(`[SCAN] fetchCandles(${stock.symbol}) took ${fetchMs}ms — JS may have been frozen`);
-    // Use market cap from Yahoo Finance candles response (free, no extra API call)
-    const stockMarketCap = candles?.marketCap ?? null;
+    await updateForegroundService(ctx.i + 1, ctx.targets.length, signalCount);
 
-    if (scanAbortFlag) {
-      await saveResumeIndex(i);
-      await persist();
-      setScanStatus('idle');
-      await stopForegroundService();
-      return;
-    }
+    const fetchStart = Date.now();
+    const candles = await fetchCandles(stock.symbol, 'D', ctx.from, ctx.to);
+    const fetchMs = Date.now() - fetchStart;
+    if (fetchMs > 15000) console.warn(`[SCAN] fetchCandles(${stock.symbol}) took ${fetchMs}ms`);
+
+    const stockMarketCap = candles?.marketCap ?? null;
 
     if (!candles || candles.close.length < 20) {
       incrementScanCounters({ noData: 1 });
-      await interruptibleDelay(RATE_LIMIT_MS);
-      continue;
+      ctx.i++;
+      return;
     }
 
-    const isPortfolioStock = portfolioSymbols.has(stock.symbol);
+    const isPortfolioStock = ctx.portfolioSymbols.has(stock.symbol);
 
     if (!isPortfolioStock && !meetsUniverseFilter(candles, UNIVERSE_MIN_PRICE, UNIVERSE_MIN_VOLUME)) {
-      failedFilter.push(stock.symbol);
+      ctx.failedFilter.push(stock.symbol);
       incrementScanCounters({ filtered: 1 });
-      await interruptibleDelay(RATE_LIMIT_MS);
-      continue;
+      ctx.i++;
+      return;
     }
 
-    // Market cap hard filter
-    if (marketCapFilterEnabled && !isPortfolioStock) {
-      const minCap = minMarketCap * 1_000_000_000;
+    if (ctx.marketCapFilterEnabled && !isPortfolioStock) {
+      const minCap = ctx.minMarketCap * 1_000_000_000;
       if (!stockMarketCap || stockMarketCap < minCap) {
         incrementScanCounters({ filtered: 1 });
-        await interruptibleDelay(RATE_LIMIT_MS);
-        continue;
+        ctx.i++;
+        return;
       }
     }
 
@@ -243,7 +284,6 @@ async function _runDailyScanCore(): Promise<void> {
     const prevPrice = candles.close[candles.close.length - 2];
     const changePercent = prevPrice > 0 ? ((currentPrice - prevPrice) / prevPrice) * 100 : 0;
 
-    // Always read criteria fresh so changes take effect without restarting
     const { enabledBuyCriteria, enabledSellCriteria, matchMode } = useCriteriaStore.getState();
     const liveBuyCriteria = enabledBuyCriteria();
     const liveSellCriteria = enabledSellCriteria();
@@ -256,7 +296,6 @@ async function _runDailyScanCore(): Promise<void> {
     const matchedBuy = buyResults.filter((r) => r.result?.matched);
     const matchedSell = sellResults.filter((r) => r.result?.matched);
 
-    // Apply match mode: 'any' = at least one match, 'all' = every enabled criteria matched
     const buyPassed = liveBuyCriteria.length === 0 ? false
       : matchMode === 'any' ? matchedBuy.length > 0
       : matchedBuy.length === liveBuyCriteria.length;
@@ -265,40 +304,35 @@ async function _runDailyScanCore(): Promise<void> {
       : matchMode === 'any' ? matchedSell.length > 0
       : matchedSell.length === liveSellCriteria.length;
 
-    if (Math.abs(changePercent) < minChangePct) {
+    if (Math.abs(changePercent) < ctx.minChangePct) {
       incrementScanCounters({ filtered: 1 });
-      await interruptibleDelay(RATE_LIMIT_MS);
-      continue;
+      ctx.i++;
+      return;
     }
 
     const matchedCriteria: string[] = [
-      ...matchedBuy.filter(r => r.c.id !== 'min_market_cap').map((r) => `${r.c.name}: ${r.result!.detail}`),
+      ...matchedBuy.filter((r) => r.c.id !== 'min_market_cap').map((r) => `${r.c.name}: ${r.result!.detail}`),
       ...matchedSell.map((r) => `${r.c.name}: ${r.result!.detail}`),
     ];
 
     if (buyPassed || sellPassed) {
       const hasSell = sellPassed;
-      const allMatched = [...matchedBuy, ...matchedSell].filter(r => r.c.id !== 'min_market_cap');
+      const allMatched = [...matchedBuy, ...matchedSell].filter((r) => r.c.id !== 'min_market_cap');
       const weights = { ...CRITERIA_WEIGHTS, ...useSettingsStore.getState().criteriaWeights };
       let score = Math.round(allMatched.reduce((sum, r) => {
         const baseWeight = weights[r.c.id] ?? 1;
-        // trending_up/down: scale by price change % (min 1pt, no cap — bigger move = higher score)
         if ((r.c.id === 'trending_up' || r.c.id === 'trending_down') && r.result?.value != null) {
           const absPct = Math.abs(r.result.value);
-          const dynamicWeight = Math.max(baseWeight, absPct / 2); // 2% move = 1pt, 10% = 5pts, etc.
+          const dynamicWeight = Math.max(baseWeight, absPct / 2);
           return sum + (r.c.id === 'trending_down' ? -dynamicWeight : dynamicWeight);
         }
         return sum + baseWeight;
       }, 0));
 
-      // Enrich with options data via Yahoo Finance (no key required)
       let optionsData = undefined;
       try {
         optionsData = await fetchOptionsData(stock.symbol);
-
-        // Evaluate options criteria
-        const { enabledBuyCriteria } = useCriteriaStore.getState();
-        const optionsCriteria = enabledBuyCriteria().filter(c =>
+        const optionsCriteria = enabledBuyCriteria().filter((c) =>
           ['put_call_ratio_low', 'put_call_ratio_high', 'high_iv', 'near_max_pain'].includes(c.id)
         );
         for (const c of optionsCriteria) {
@@ -337,21 +371,38 @@ async function _runDailyScanCore(): Promise<void> {
         marketCap: stockMarketCap ?? candles.marketCap ?? null,
         optionsData,
       };
-      addSignal(signal); // shows up in the list immediately
+      addSignal(signal);
     }
 
-    await interruptibleDelay(RATE_LIMIT_MS);
+    ctx.i++;
+  } finally {
+    if (scanCtx) scanCtx.isRunning = false;
   }
+}
 
-  if (failedFilter.length > 0) await addToSkipList(failedFilter);
+async function finalizeScan() {
+  const ctx = scanCtx;
+  if (!ctx) return;
+  const { addToSkipList, markScanComplete, clearResumeIndex } = useScanStore.getState();
+  const { persist } = useSignalsStore.getState();
 
-  await persist(); // flush all signals to storage
+  if (ctx.failedFilter.length > 0) await addToSkipList(ctx.failedFilter);
+  await persist();
   await clearResumeIndex();
   markScanComplete();
-  await stopForegroundService();
+
+  await teardownScanTask();
 
   const { signals } = useSignalsStore.getState();
   if (signals.length > 0) await sendScanNotification(signals);
+}
+
+async function teardownScanTask() {
+  scanCtx = null;
+  if (ForegroundService) {
+    try { ForegroundService.remove_task(SCAN_TASK_ID); } catch (_) {}
+  }
+  await stopForegroundService();
 }
 
 async function sendScanNotification(signals: Signal[]) {
