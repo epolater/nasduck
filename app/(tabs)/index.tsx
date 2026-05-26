@@ -1,11 +1,14 @@
 import { useRouter } from 'expo-router';
-import { useKeepAwake } from 'expo-keep-awake';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Animated,
   ActivityIndicator,
   AppState,
+  Linking,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,6 +16,7 @@ import {
   TouchableWithoutFeedback,
   View,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const ROW_H    = 40;
 const HEADER_H = 36;
@@ -102,8 +106,13 @@ export default function SignalsScreen() {
 
   const isScanning = scan.status === 'scanning';
 
-  // Keep screen awake while scan is running
-  useKeepAwake(isScanning ? 'nasduck-scan' : undefined);
+  useEffect(() => {
+    if (isScanning) {
+      activateKeepAwakeAsync('nasduck-scan').catch(() => {});
+    } else {
+      deactivateKeepAwake('nasduck-scan').catch(() => {});
+    }
+  }, [isScanning]);
 
   useEffect(() => { setActiveFilters(new Set()); setSortCol('score'); setSortDir('desc'); }, [tab]);
 
@@ -321,6 +330,26 @@ export default function SignalsScreen() {
     }
   }
 
+  async function startLocalScan() {
+    runDailyScan();
+    // On Android, prompt once to disable battery optimization.
+    // Samsung/MIUI freeze background processes even with a foreground service.
+    if (Platform.OS === 'android') {
+      const shown = await AsyncStorage.getItem('nasduck:battery_prompt_shown');
+      if (!shown) {
+        await AsyncStorage.setItem('nasduck:battery_prompt_shown', '1');
+        Alert.alert(
+          'Allow Background Scanning',
+          'To prevent Samsung from stopping the scan when the app is minimized:\n\nSettings → Apps → Nasduck → Battery → select "Unrestricted"',
+          [
+            { text: 'Later', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() },
+          ],
+        );
+      }
+    }
+  }
+
   function toggleFilter(name: string) {
     setActiveFilters((prev) => {
       const next = new Set(prev);
@@ -475,7 +504,7 @@ export default function SignalsScreen() {
               (!serverRegistered && resumeIndex != null) && styles.scanBtnResume,
               (serverRegistered && cloudResumeIndex != null) && styles.scanBtnResume,
             ]}
-            onPress={() => serverRegistered ? startCloudScan(false) : runDailyScan()}
+            onPress={() => serverRegistered ? startCloudScan(false) : startLocalScan()}
             disabled={!serverRegistered && universe.stocks.length === 0}
           >
             {serverRegistered ? (

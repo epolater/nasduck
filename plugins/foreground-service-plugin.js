@@ -20,9 +20,8 @@ module.exports = function withForegroundServiceType(config) {
     ensureService('com.supersami.foregroundservice.ForegroundService');
 
     // Headless JS task runner — required for runTask() called inside start()
-    ensureService('com.supersami.foregroundservice.ForegroundServiceTask', {
-      'android:permission': 'android.permission.BIND_JOB_SERVICE',
-    });
+    // Note: no android:permission here — HeadlessJsTaskService is not a JobService
+    ensureService('com.supersami.foregroundservice.ForegroundServiceTask');
 
     return config;
   });

@@ -26,17 +26,17 @@ if (Platform.OS === 'android') {
   }
 }
 
-async function startForegroundService(total: number) {
+async function startForegroundService(current: number, total: number) {
   if (!ForegroundService) return;
   try {
     await ForegroundService.start({
       id: 1,
       title: 'Nasduck — Scanning',
-      message: `Scanning 0/${total} stocks…`,
+      message: `Scanning ${current}/${total} stocks…`,
       importance: 'high',
       ServiceType: 'dataSync',
       visibility: 'public',
-      number: '0',
+      number: `${current}`,
       ongoing: true,
     });
     console.log('[FG] Foreground service started');
@@ -86,10 +86,15 @@ export function abortUniverseBuild() {
 }
 
 async function interruptibleDelay(ms: number): Promise<void> {
-  const end = Date.now() + ms;
+  const start = Date.now();
+  const end = start + ms;
   while (Date.now() < end) {
     if (scanAbortFlag) return;
     await delay(Math.min(100, end - Date.now()));
+  }
+  const actual = Date.now() - start;
+  if (actual > ms + 2000) {
+    console.warn(`[SCAN] delay frozen for ${actual - ms}ms (expected ${ms}ms) — JS thread was paused`);
   }
 }
 
@@ -171,7 +176,7 @@ async function _runDailyScanCore(): Promise<void> {
   }
 
   setScanStatus('scanning', startFrom, targets.length);
-  await startForegroundService(targets.length);
+  await startForegroundService(startFrom, targets.length);
 
   const to = Math.floor(Date.now() / 1000);
   const from = to - 86400 * 260;
@@ -190,11 +195,12 @@ async function _runDailyScanCore(): Promise<void> {
 
     const stock = targets[i];
     setScanStatus('scanning', i + 1, targets.length);
-    if (i % 50 === 0) {
-      const signalCount = useSignalsStore.getState().signals.length;
-      await updateForegroundService(i + 1, targets.length, signalCount);
-    }
+    const signalCount = useSignalsStore.getState().signals.length;
+    await updateForegroundService(i + 1, targets.length, signalCount);
+    const fetchStart = Date.now();
     const candles = await fetchCandles(stock.symbol, 'D', from, to);
+    const fetchMs = Date.now() - fetchStart;
+    if (fetchMs > 15000) console.warn(`[SCAN] fetchCandles(${stock.symbol}) took ${fetchMs}ms — JS may have been frozen`);
     // Use market cap from Yahoo Finance candles response (free, no extra API call)
     const stockMarketCap = candles?.marketCap ?? null;
 
