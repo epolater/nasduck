@@ -37,7 +37,8 @@ export async function requestNotificationPermissions(): Promise<boolean> {
       await Notifications.setNotificationChannelAsync('nasduck-alerts', {
         name: 'Stock Alerts',
         importance: Notifications.AndroidImportance.MAX,
-        vibrationPattern: [0, 250, 250, 250],
+        enableVibrate: false,
+        vibrationPattern: null,
         lightColor: '#00d4aa',
         sound: 'default',
       });

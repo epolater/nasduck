@@ -20,14 +20,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const ROW_H    = 40;
 const HEADER_H = 36;
-import { COLORS, CLOUD_SERVER_URL } from '../../constants';
+import { COLORS, CLOUD_SERVER_URL, LOCAL_SCAN_MAX_STOCKS } from '../../constants';
 
 import { useCriteriaStore } from '../../store/criteriaStore';
 import { useScanStore } from '../../store/scanStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useSignalsStore } from '../../store/signalsStore';
 import { useWatchlistStore } from '../../store/watchlistStore';
-import { abortScan, isScanDue, restartScan, runDailyScan } from '../../tasks/dailyScanner';
+import { abortScan, isScanDue, restartScan, runDailyScan, startForegroundService, updateForegroundService, stopForegroundService } from '../../tasks/dailyScanner';
 import * as Notifications from 'expo-notifications';
 import { triggerServerScan, stopServerScan, getCloudScanStatus, registerWithServer, getDeviceId } from '../../services/serverSync';
 import { useServerLogStore } from '../../store/serverLogStore';
@@ -128,14 +128,19 @@ export default function SignalsScreen() {
   }
 
   useEffect(() => {
+    const dailyOn = useSettingsStore.getState().dailyScanEnabled;
     const sub = AppState.addEventListener('change', (next) => {
       if (appState.current.match(/inactive|background/) && next === 'active') {
-        if (serverRegistered) checkServerScanState();
+        // Daily scan on (whether cloud UI is on or off) → ask server for state.
+        // checkServerScanState handles both "server done" (load signals) and
+        // "server still scanning" (show progress). It only starts live polling
+        // if the cloud-scan UI toggle (serverRegistered) is on.
+        if (dailyOn) checkServerScanState();
         else checkAndRunScan();
       }
       appState.current = next;
     });
-    if (serverRegistered) { checkServerScanState(); }
+    if (dailyOn) checkServerScanState();
     else checkAndRunScan();
     return () => sub.remove();
   }, [scanHour, scanMinute, serverRegistered]);
@@ -180,7 +185,12 @@ export default function SignalsScreen() {
     if (status.scanning) {
       addLog('Server is already scanning — resuming…', 'info');
       setCloudScanning(true);
-      startCloudPolling();
+      // Show current snapshot regardless of cloud-UI toggle so the user sees progress
+      useScanStore.getState().setScanStatus('scanning', status.progress, status.total);
+      if (status.signals?.length > 0) setSignals(status.signals);
+      // Only kick off the live polling loop when the cloud-scan UI is enabled.
+      // With UI off, the snapshot above is the user's view until they reopen the app.
+      if (serverRegistered) startCloudPolling();
     } else {
       // Always sync signals and lastScanAt from server — covers crash/restart case
       if (status.lastSignals?.length > 0) {
@@ -207,6 +217,9 @@ export default function SignalsScreen() {
 
     useScanStore.getState().setScanStatus('scanning', 0, 0);
     addLog('Polling server for scan status…', 'info');
+
+    // Start a persistent notification mirroring the server scan status
+    startForegroundService(0, 0, 'cloud');
 
     pollRef.current = setInterval(async () => {
       pollCount++;
@@ -247,8 +260,12 @@ export default function SignalsScreen() {
           setSignals(status.signals);
           addLog(`🎯 ${status.signals.length} match${status.signals.length !== 1 ? 'es' : ''} found so far`, 'ok');
         }
+        // Mirror progress in the persistent notification
+        const signalsCount = status.signals?.length ?? 0;
+        updateForegroundService(status.progress, status.total, signalsCount, 'cloud');
       } else if (seenScanning) {
         stopCloudPolling();
+        stopForegroundService();
         setCloudScanning(false);
         setCloudResumeIndex(null);
         markScanComplete();
@@ -267,6 +284,7 @@ export default function SignalsScreen() {
 
   function stopCloudPolling() {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    stopForegroundService();
   }
 
   async function startCloudScan(fresh: boolean) {
@@ -297,6 +315,12 @@ export default function SignalsScreen() {
   // Reset on unmount
   useEffect(() => () => stopCloudPolling(), []);
 
+  // Cloud-scan UI toggled off → stop any active live polling. Daily scan may still
+  // be running on the server; the user just doesn't want live progress in the UI.
+  useEffect(() => {
+    if (!serverRegistered) stopCloudPolling();
+  }, [serverRegistered]);
+
   // Listen for server wakeup — auto-start polling if scan kicked off while app is open
   useEffect(() => {
     const handler = () => {
@@ -322,8 +346,11 @@ export default function SignalsScreen() {
 
   function checkAndRunScan() {
     if (serverRegistered) return; // server handles its own schedule
+    if (!useSettingsStore.getState().dailyScanEnabled) return; // auto-scan disabled
     if (isScanning) return;
     if (universe.stocks.length === 0) return;
+    // Universe too big for unattended local scans — only manual "Scan Now" allowed.
+    if (universe.stocks.length > LOCAL_SCAN_MAX_STOCKS) return;
     const { lastScanAt } = useScanStore.getState().scan;
     if (isScanDue(lastScanAt, scanHour, scanMinute)) {
       runDailyScan();

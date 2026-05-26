@@ -14,6 +14,8 @@ import { Stack } from 'expo-router';
 import { COLORS } from '../../constants';
 import { useSettingsStore } from '../../store/settingsStore';
 import { registerWithServer } from '../../services/serverSync';
+import { buildUniverse } from '../../tasks/dailyScanner';
+import { useScanStore } from '../../store/scanStore';
 import { useServerLogStore } from '../../store/serverLogStore';
 
 export default function CloudScreen() {
@@ -53,6 +55,16 @@ export default function CloudScreen() {
               if (val) {
                 setServerStatus('loading');
                 setServerMsg('');
+                // Cloud scan requires Mid+ universe (cap of $2B). Always rebuild on enable
+                // so the server gets the latest universe and the right tier is applied.
+                const { universeTier } = useSettingsStore.getState();
+                if (universeTier < 2) {
+                  await save({ universeTier: 2 });
+                  setServerMsg('Bumping universe to Mid+ for cloud scan…');
+                } else {
+                  setServerMsg('Rebuilding universe for cloud scan…');
+                }
+                await buildUniverse();
                 const res = await registerWithServer();
                 if (res.ok) {
                   await save({ serverRegistered: true });
@@ -66,6 +78,11 @@ export default function CloudScreen() {
                 await save({ serverRegistered: false });
                 setServerStatus('idle');
                 setServerMsg('');
+                // If daily scan is still on, keep the device registered with the server
+                // (silently) so the cron keeps firing. Just push the new flags so the
+                // server knows the cloud-scan UI is off.
+                const { dailyScanEnabled } = useSettingsStore.getState();
+                if (dailyScanEnabled) registerWithServer().catch(() => {});
               }
             }}
             trackColor={{ false: COLORS.border, true: COLORS.primary }}

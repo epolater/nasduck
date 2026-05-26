@@ -19,7 +19,12 @@ export const useSignalsStore = create<SignalsState>((set, get) => ({
   signals: [],
 
   addSignal: (signal) => {
-    set((s) => ({ signals: [...s.signals, signal] }));
+    set((s) => {
+      // Dedup by symbol — within a scan, only one signal per symbol.
+      // Prevents duplicate React keys if id collides or scan re-adds a symbol.
+      const filtered = s.signals.filter((x) => x.symbol !== signal.symbol);
+      return { signals: [...filtered, signal] };
+    });
   },
 
   persist: async () => {
@@ -27,8 +32,12 @@ export const useSignalsStore = create<SignalsState>((set, get) => ({
   },
 
   setSignals: async (signals) => {
-    set({ signals });
-    await AsyncStorage.setItem(KEY, JSON.stringify(signals));
+    // Dedup by symbol — last write wins per symbol
+    const bySymbol = new Map<string, Signal>();
+    signals.forEach((s) => bySymbol.set(s.symbol, s));
+    const deduped = Array.from(bySymbol.values());
+    set({ signals: deduped });
+    await AsyncStorage.setItem(KEY, JSON.stringify(deduped));
   },
 
   clear: async () => {

@@ -64,6 +64,7 @@ export interface PortfolioStock {
 export interface ScanUniverseStock {
   symbol: string;
   name: string;
+  marketCap?: number | null; // in dollars, from NASDAQ screener
 }
 
 export interface ScanUniverse {

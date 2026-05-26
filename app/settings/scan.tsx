@@ -13,8 +13,10 @@ import {
 } from 'react-native';
 import { Stack } from 'expo-router';
 import * as Notifications from 'expo-notifications';
-import { COLORS } from '../../constants';
+import { COLORS, LOCAL_SCAN_MAX_STOCKS } from '../../constants';
 import { useSettingsStore } from '../../store/settingsStore';
+import { useScanStore } from '../../store/scanStore';
+import { useRouter } from 'expo-router';
 import { registerWithServer } from '../../services/serverSync';
 
 const ITEM_H = 52;
@@ -62,6 +64,7 @@ function WheelPicker({ values, selected, format, onChange }: WheelPickerProps) {
         contentContainerStyle={{ paddingVertical: pad }}
         onMomentumScrollEnd={handleScrollEnd}
         scrollEventThrottle={16}
+        nestedScrollEnabled
       >
         {values.map((v, i) => {
           const isSelected = v === selected;
@@ -82,15 +85,25 @@ const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const MINUTES = Array.from({ length: 60 }, (_, i) => i);
 
 export default function ScanScreen() {
-  const { scanHour, scanMinute, scanWeekends, minChangePct, serverRegistered, save } = useSettingsStore();
+  const router = useRouter();
+  const { dailyScanEnabled, scanHour, scanMinute, scanWeekends, minChangePct, serverRegistered, save } = useSettingsStore();
+  const universe = useScanStore((s) => s.universe);
 
   const timeLabel = `${String(scanHour).padStart(2, '0')}:${String(scanMinute).padStart(2, '0')}`;
 
+  // Universe too big to scan locally and cloud is off → block the daily-scan toggle.
+  // Manual "Scan Now" still works; this only gates the unattended/auto path.
+  const universeSize = universe.stocks.length;
+  const requiresCloud = universeSize > LOCAL_SCAN_MAX_STOCKS && !serverRegistered;
+
   async function handleScanTimeChange(hour: number, minute: number) {
     await save({ scanHour: hour, scanMinute: minute });
+    // Always keep server's cron in sync — the device is silently registered
+    // on first launch even with cloud-scan UI off, so the server has it.
+    registerWithServer().catch(() => {});
     if (serverRegistered) {
-      registerWithServer().catch(() => {});
-      // Reschedule the background wakeup notification to the new time
+      // Reschedule the local background wakeup notification to the new time.
+      // Only needed when the cloud-scan UI is on (it drives live progress).
       await Notifications.cancelAllScheduledNotificationsAsync();
       await Notifications.scheduleNotificationAsync({
         content: { title: 'Nasduck', body: 'Starting scan…', data: { type: 'server_wakeup' } },
@@ -108,15 +121,50 @@ export default function ScanScreen() {
       <Stack.Screen options={{ title: 'Scan Settings' }} />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
 
+        {/* Master toggle */}
+        <View style={styles.toggleRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.toggleLabel}>Daily auto-scan</Text>
+            <Text style={styles.toggleSub}>
+              {requiresCloud
+                ? `Universe is ${universeSize.toLocaleString()} stocks — too big to run locally. Enable Cloud Scan to use daily auto-scan.`
+                : dailyScanEnabled ? 'Runs automatically at the scheduled time' : 'Disabled — scan only when you tap Scan Now'}
+            </Text>
+          </View>
+          <Switch
+            value={dailyScanEnabled && !requiresCloud}
+            disabled={requiresCloud}
+            onValueChange={async (v) => {
+              await save({ dailyScanEnabled: v });
+              if (!v) {
+                await Notifications.cancelAllScheduledNotificationsAsync().catch(() => {});
+              }
+              // Always sync with server so it can schedule (or tear down) its cron.
+              // Daily scan implies server registration even when the cloud-scan UI is off.
+              registerWithServer().catch(() => {});
+            }}
+            trackColor={{ false: COLORS.border, true: COLORS.primary + '88' }}
+            thumbColor={dailyScanEnabled && !requiresCloud ? COLORS.primary : COLORS.textMuted}
+          />
+        </View>
+
+        {requiresCloud && (
+          <TouchableOpacity style={styles.cloudCta} onPress={() => router.push('/settings/cloud')}>
+            <Text style={styles.cloudCtaText}>Open Cloud Scan settings →</Text>
+          </TouchableOpacity>
+        )}
+
+        <View style={[styles.divider, { marginVertical: 16 }]} />
+
         {/* Scan Time */}
-        <Text style={styles.sectionLabel}>DAILY SCAN TIME</Text>
-        <Text style={styles.sectionDesc}>
+        <Text style={[styles.sectionLabel, !dailyScanEnabled && { opacity: 0.4 }]}>DAILY SCAN TIME</Text>
+        <Text style={[styles.sectionDesc, !dailyScanEnabled && { opacity: 0.4 }]}>
           {serverRegistered
             ? 'Server scans automatically at this time (US Eastern, weekdays). App will be notified with results.'
             : 'The app will auto-scan when opened at or after this time each day.'}
         </Text>
 
-        <View style={styles.pickerContainer}>
+        <View style={[styles.pickerContainer, !dailyScanEnabled && { opacity: 0.35 }]} pointerEvents={dailyScanEnabled ? 'auto' : 'none'}>
           <WheelPicker
             values={HOURS}
             selected={scanHour}
@@ -130,9 +178,9 @@ export default function ScanScreen() {
           />
         </View>
 
-        <Text style={styles.timeLabel}>{timeLabel} ET</Text>
+        <Text style={[styles.timeLabel, !dailyScanEnabled && { opacity: 0.4 }]}>{timeLabel} ET</Text>
 
-        <View style={styles.toggleRow}>
+        <View style={[styles.toggleRow, !dailyScanEnabled && { opacity: 0.4 }]} pointerEvents={dailyScanEnabled ? 'auto' : 'none'}>
           <View style={{ flex: 1 }}>
             <Text style={styles.toggleLabel}>Scan on weekends</Text>
             <Text style={styles.toggleSub}>Markets are closed but scan still runs</Text>
@@ -262,4 +310,10 @@ const styles = StyleSheet.create({
   },
   toggleLabel: { color: COLORS.text, fontWeight: '600', fontSize: 14 },
   toggleSub: { color: COLORS.textMuted, fontSize: 11, marginTop: 2 },
+  cloudCta: {
+    marginTop: 10, paddingVertical: 10, paddingHorizontal: 14,
+    borderRadius: 8, backgroundColor: COLORS.primary + '18',
+    borderWidth: 1, borderColor: COLORS.primary + '55',
+  },
+  cloudCtaText: { color: COLORS.primary, fontWeight: '600', fontSize: 13 },
 });

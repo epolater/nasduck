@@ -9,6 +9,7 @@ interface CriteriaState {
   criteria: ScreenerCriteria[];
   matchMode: MatchMode;
   toggleCriteria: (id: CriteriaId) => Promise<void>;
+  setAllEnabled: (enabled: boolean, signal?: 'buy' | 'sell') => Promise<void>;
   setThreshold: (id: CriteriaId, value: number) => Promise<void>;
   setThreshold2: (id: CriteriaId, value: number) => Promise<void>;
   setMatchMode: (mode: MatchMode) => Promise<void>;
@@ -28,6 +29,14 @@ export const useCriteriaStore = create<CriteriaState>((set, get) => ({
   toggleCriteria: async (id) => {
     const updated = get().criteria.map((c) =>
       c.id === id ? { ...c, enabled: !c.enabled } : c,
+    );
+    set({ criteria: updated });
+    await AsyncStorage.setItem(KEY, JSON.stringify(updated));
+  },
+
+  setAllEnabled: async (enabled, signal) => {
+    const updated = get().criteria.map((c) =>
+      (signal == null || c.signal === signal) ? { ...c, enabled } : c,
     );
     set({ criteria: updated });
     await AsyncStorage.setItem(KEY, JSON.stringify(updated));

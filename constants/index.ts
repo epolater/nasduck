@@ -28,6 +28,10 @@ export const UNIVERSE_MIN_PRICE = 5;       // USD
 export const UNIVERSE_MIN_VOLUME = 500000; // shares/day avg
 export const RATE_LIMIT_MS = 1200;         // ms between API calls (50/min)
 
+// Daily auto-scan is blocked locally above this. At ~1.5s/stock, 1000 stocks
+// ≈ 25 min — anything bigger should run via Cloud Scan instead.
+export const LOCAL_SCAN_MAX_STOCKS = 1000;
+
 // Default minimum absolute price change % — filters flat/boring stocks
 export const DEFAULT_MIN_CHANGE_PCT = 1.0;
 

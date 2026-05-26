@@ -23,6 +23,8 @@ import { useAiAnalysisStore } from '../../store/aiAnalysisStore';
 import { useCriteriaStore } from '../../store/criteriaStore';
 import { useWatchlistStore } from '../../store/watchlistStore';
 import { useSettingsStore } from '../../store/settingsStore';
+import { useScanStore } from '../../store/scanStore';
+import { useSignalsStore } from '../../store/signalsStore';
 import { CandleData } from '../../types';
 import { evaluateCriteria } from '../../utils/technicalAnalysis';
 
@@ -188,7 +190,14 @@ export default function StockDetailScreen() {
       const from = to - 86400 * 260;
       const c = await fetchCandles(symbol, 'D', from, to);
       setCandles(c);
-      setMarketCap(c?.marketCap ?? null);
+      // Yahoo's chart endpoint omits marketCap. Use the universe-cached cap from the
+      // NASDAQ screener as the primary source, fall back to candles meta or any signal
+      // that already has it (e.g. portfolio holding scanned earlier).
+      const universeMatch = useScanStore.getState().universe.stocks.find((s) => s.symbol === symbol);
+      const signalMatch = useSignalsStore.getState().signals.find((s) => s.symbol === symbol);
+      setMarketCap(
+        universeMatch?.marketCap ?? c?.marketCap ?? signalMatch?.marketCap ?? null
+      );
     } catch (_) {
     } finally {
       setLoading(false);

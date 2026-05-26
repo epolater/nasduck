@@ -120,8 +120,11 @@ export async function fetchNasdaqByMarketCap(
     console.log(`[NasdaqScreener] Got ${rows.length} stocks${minCapBillions > 0 ? ` for tiers: ${tiers.join(',')}` : ' (no market cap filter)'}`);
     for (const row of rows) {
       if (row.symbol && !row.symbol.includes('/') && !row.symbol.includes('^')) {
+        // Screener returns marketCap as a comma-separated string in dollars (e.g. "5,199,612,000,000")
+        const raw = row.marketCap;
+        const cap = typeof raw === 'string' ? Number(raw.replace(/[$,]/g, '')) : null;
         result.set(row.symbol, {
-          marketCap: null, // not needed, already filtered by tier
+          marketCap: cap && cap > 0 ? cap : null,
           name: row.name ?? row.symbol,
         });
       }

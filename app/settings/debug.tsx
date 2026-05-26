@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { Stack } from 'expo-router';
 import { COLORS, CLOUD_SERVER_URL } from '../../constants';
-import { fetchCandles } from '../../services/finnhub';
+import { fetchCandles, fetchNasdaqByMarketCap } from '../../services/finnhub';
 import { fetchOptionsData } from '../../services/options';
 import { getDeviceId } from '../../services/serverSync';
 import axios from 'axios';
@@ -27,6 +27,7 @@ const INIT: TestResult = { status: 'idle', output: '' };
 
 export default function DebugScreen() {
   const [yahoo, setYahoo]     = useState<TestResult>(INIT);
+  const [nasdaq, setNasdaq]   = useState<TestResult>(INIT);
   const [options, setOptions] = useState<TestResult>(INIT);
   const [server, setServer]   = useState<TestResult>(INIT);
 
@@ -53,6 +54,32 @@ export default function DebugScreen() {
       });
     } catch (e: any) {
       setYahoo({ status: 'error', output: `Error: ${e?.message ?? String(e)}` });
+    }
+  }
+
+  async function testNasdaq() {
+    setNasdaq({ status: 'loading', output: '' });
+    try {
+      // Use mega tier for a fast, predictable result (~30 stocks)
+      const data = await fetchNasdaqByMarketCap(200);
+      if (data.size === 0) {
+        setNasdaq({ status: 'error', output: 'Screener returned 0 stocks. API may be down or blocked.' });
+        return;
+      }
+      const entries = Array.from(data.entries());
+      const withCap = entries.filter(([, v]) => v.marketCap != null).length;
+      const sample = entries.slice(0, 3).map(([sym, v]) =>
+        `${sym}: ${v.marketCap ? '$' + (v.marketCap / 1e9).toFixed(1) + 'B' : 'cap n/a'}`
+      ).join('\n');
+      setNasdaq({
+        status: 'ok',
+        output:
+          `✓ ${data.size} mega-cap stocks received\n` +
+          `Market cap present: ${withCap}/${data.size}\n\n` +
+          `Sample:\n${sample}`,
+      });
+    } catch (e: any) {
+      setNasdaq({ status: 'error', output: `Error: ${e?.message ?? String(e)}` });
     }
   }
 
@@ -106,10 +133,10 @@ export default function DebugScreen() {
   }
 
   async function testAll() {
-    await Promise.all([testYahoo(), testOptions(), testServer()]);
+    await Promise.all([testYahoo(), testNasdaq(), testOptions(), testServer()]);
   }
 
-  const anyLoading = [yahoo, options, server].some(r => r.status === 'loading');
+  const anyLoading = [yahoo, nasdaq, options, server].some(r => r.status === 'loading');
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -137,6 +164,14 @@ export default function DebugScreen() {
           buttonText="Test Candles"
           result={yahoo}
           onPress={testYahoo}
+        />
+
+        <TestBlock
+          label="NASDAQ SCREENER — UNIVERSE"
+          desc="Symbol universe + market caps (no API key, mega-cap tier)"
+          buttonText="Test Screener"
+          result={nasdaq}
+          onPress={testNasdaq}
         />
 
         <TestBlock

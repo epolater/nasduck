@@ -17,6 +17,7 @@ import { useSettingsStore } from '../store/settingsStore';
 import { useSignalsStore } from '../store/signalsStore';
 import * as Notifications from 'expo-notifications';
 import { registerWithServer, getCloudScanStatus, wakeupServer, triggerServerScan } from '../services/serverSync';
+import { buildUniverse } from '../tasks/dailyScanner';
 
 // ── Background task — pings server every ~15 min to keep Render alive ──
 const KEEP_ALIVE_TASK = 'nasduck-keep-alive';
@@ -82,7 +83,8 @@ Notifications.setNotificationHandler({
     }
 
     return {
-      shouldShowAlert: !isServerWakeup,
+      shouldShowBanner: !isServerWakeup,
+      shouldShowList: !isServerWakeup,
       shouldPlaySound: !isServerWakeup,
       shouldSetBadge: false,
     };
@@ -129,18 +131,44 @@ export default function RootLayout() {
         useScanStore.getState().loadUniverse(),
       ]);
 
+      // First launch: build the universe with the default tier so the user can scan immediately
+      if (useScanStore.getState().universe.stocks.length === 0) {
+        console.log('[Init] No universe found — building with default tier');
+        buildUniverse().catch((e) => console.warn('[Init] First-launch universe build failed:', e));
+      }
+
       await requestNotificationPermissions();
 
-      const { serverRegistered, scanHour, scanMinute } = useSettingsStore.getState();
+      const { dailyScanEnabled, serverRegistered, serverRegisteredAt, scanHour, scanMinute } = useSettingsStore.getState();
 
-      if (serverRegistered) {
-        await scheduleServerWakeup(scanHour, scanMinute);
-        registerWithServer().catch(() => {});
-        scheduleScanTimer(scanHour, scanMinute);
-        await registerKeepAliveTask();
+      // First launch ever: silently register this device with the server so it's
+      // known and ready, regardless of whether daily scan / cloud scan is on yet.
+      // Subsequent registers happen when settings change (toggle, scan time, etc.).
+      if (!serverRegisteredAt) {
+        console.log('[Init] First launch — registering device with server');
+        registerWithServer().catch((e) => console.warn('[Init] First-launch register failed:', e));
+      }
+
+      if (!dailyScanEnabled) {
+        // Auto-scan disabled — clear any pending notifications and skip scheduling.
+        // Server will be told dailyScanEnabled=false next time the user toggles anything.
+        await Notifications.cancelAllScheduledNotificationsAsync().catch(() => {});
+        await unregisterKeepAliveTask().catch(() => {});
       } else {
-        await Notifications.cancelAllScheduledNotificationsAsync();
-        await unregisterKeepAliveTask();
+        // Daily scan is on → make sure the server knows about us and has our schedule,
+        // regardless of whether the cloud-scan UI toggle is on. This is the "silent
+        // registration" path so the server cron fires even with cloud UI off.
+        registerWithServer().catch(() => {});
+        // The local wakeup notification + scheduled timer + keep-alive are only useful
+        // when the user has the cloud-scan UI on (they drive live progress).
+        if (serverRegistered) {
+          await scheduleServerWakeup(scanHour, scanMinute);
+          scheduleScanTimer(scanHour, scanMinute);
+          await registerKeepAliveTask();
+        } else {
+          await Notifications.cancelAllScheduledNotificationsAsync().catch(() => {});
+          await unregisterKeepAliveTask().catch(() => {});
+        }
       }
     }
     init();

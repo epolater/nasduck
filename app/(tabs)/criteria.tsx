@@ -15,7 +15,7 @@ import { useSettingsStore } from '../../store/settingsStore';
 import { CriteriaId, ScreenerCriteria } from '../../types';
 
 export default function CriteriaScreen() {
-  const { criteria, matchMode, setMatchMode, toggleCriteria, setThreshold, setThreshold2, reorderCriteria } = useCriteriaStore();
+  const { criteria, matchMode, setMatchMode, toggleCriteria, setThreshold, setThreshold2, reorderCriteria, setAllEnabled } = useCriteriaStore();
   const { minScore, minMarketCap, save: saveSettings } = useSettingsStore();
   const scrollRef = useRef<ScrollView>(null);
   const [editMode, setEditMode] = useState(false);
@@ -109,14 +109,24 @@ export default function CriteriaScreen() {
         <Text style={[styles.minScoreDesc, { marginTop: 10 }]}>Applied per-stock during scan. Universe tier is set separately in Settings → Scan Universe.</Text>
       </View>
 
-      {/* Section header with edit toggle */}
+      {/* Section header with bulk toggle + edit toggle */}
       <View style={styles.sectionRow}>
         <Text style={styles.sectionLabel}>BUY CRITERIA — scans all NASDAQ stocks</Text>
-        <TouchableOpacity style={[styles.editBtn, editMode && styles.editBtnActive]} onPress={toggleEditMode}>
-          <Text style={[styles.editBtnText, editMode && styles.editBtnTextActive]}>
-            {editMode ? 'Done' : 'Reorder'}
-          </Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <TouchableOpacity
+            style={[styles.editBtn, { borderColor: COLORS.buy }]}
+            onPress={() => setAllEnabled(buyCriteria.some(c => !c.enabled), 'buy')}
+          >
+            <Text style={[styles.editBtnText, { color: COLORS.buy }]}>
+              {buyCriteria.some(c => !c.enabled) ? 'All On' : 'All Off'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.editBtn, editMode && styles.editBtnActive]} onPress={toggleEditMode}>
+            <Text style={[styles.editBtnText, editMode && styles.editBtnTextActive]}>
+              {editMode ? 'Done' : 'Reorder'}
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
       <DraggableSection
         items={buyCriteria}
@@ -128,6 +138,14 @@ export default function CriteriaScreen() {
 
       <View style={[styles.sectionRow, { marginTop: 24 }]}>
         <Text style={styles.sectionLabel}>SELL CRITERIA — scans your portfolio only</Text>
+        <TouchableOpacity
+          style={[styles.editBtn, { borderColor: COLORS.sell }]}
+          onPress={() => setAllEnabled(sellCriteria.some(c => !c.enabled), 'sell')}
+        >
+          <Text style={[styles.editBtnText, { color: COLORS.sell }]}>
+            {sellCriteria.some(c => !c.enabled) ? 'All On' : 'All Off'}
+          </Text>
+        </TouchableOpacity>
       </View>
       <DraggableSection
         items={sellCriteria}

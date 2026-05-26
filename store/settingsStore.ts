@@ -4,6 +4,7 @@ import { CRITERIA_WEIGHTS, DEFAULT_MIN_CHANGE_PCT } from '../constants';
 import { AiModelId } from '../services/ai';
 
 interface Settings {
+  dailyScanEnabled: boolean; // master switch for the scheduled daily scan
   scanHour: number;        // 0-23
   scanMinute: number;      // 0-59
   scanWeekends: boolean;   // include weekends
@@ -15,6 +16,7 @@ interface Settings {
   googleAiKey: string;
   groqKey: string;
   serverRegistered: boolean;
+  serverRegisteredAt: number | null; // timestamp of first successful /register call
   criteriaWeights: Record<string, number>;
 }
 
@@ -25,6 +27,7 @@ interface SettingsState extends Settings {
 
 const KEY = 'nasduck:settings_v2';
 const DEFAULTS: Settings = {
+  dailyScanEnabled: false,
   scanHour: 18,
   scanMinute: 0,
   scanWeekends: false,
@@ -36,6 +39,7 @@ const DEFAULTS: Settings = {
   googleAiKey: '',
   groqKey: '',
   serverRegistered: false,
+  serverRegisteredAt: null,
   criteriaWeights: { ...CRITERIA_WEIGHTS },
 };
 
@@ -46,6 +50,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const updated = { ...get(), ...partial };
     set(updated);
     await AsyncStorage.setItem(KEY, JSON.stringify({
+      dailyScanEnabled: updated.dailyScanEnabled,
       scanHour: updated.scanHour,
       scanMinute: updated.scanMinute,
       minChangePct: updated.minChangePct,
@@ -56,6 +61,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       googleAiKey: updated.googleAiKey,
       groqKey: updated.groqKey,
       serverRegistered: updated.serverRegistered,
+      serverRegisteredAt: updated.serverRegisteredAt,
       scanWeekends: updated.scanWeekends,
       criteriaWeights: updated.criteriaWeights,
     }));

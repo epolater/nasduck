@@ -20,7 +20,7 @@ export async function registerWithServer(): Promise<{ ok: boolean; message?: str
     const tokenData = await Notifications.getExpoPushTokenAsync();
     const pushToken = tokenData.data;
 
-    const { scanHour, scanMinute, scanWeekends, minChangePct, minScore, minMarketCap, criteriaWeights } = useSettingsStore.getState();
+    const { dailyScanEnabled, scanHour, scanMinute, scanWeekends, minChangePct, minScore, minMarketCap, criteriaWeights } = useSettingsStore.getState();
 
     // Convert local scan time to UTC so server schedules correctly regardless of timezone
     const localDate = new Date();
@@ -33,6 +33,7 @@ export async function registerWithServer(): Promise<{ ok: boolean; message?: str
     const res = await axios.post(`${CLOUD_SERVER_URL}/register`, {
       deviceId: getDeviceId(),
       pushToken,
+      dailyScanEnabled,
       criteria: criteria.filter(c => c.enabled),
       matchMode,
       minChangePct,
@@ -44,8 +45,15 @@ export async function registerWithServer(): Promise<{ ok: boolean; message?: str
       criteriaWeights,
       scanHour,
       scanMinute,
-      universe: universe.stocks.length > 0 ? universe.stocks.map(s => s.symbol) : undefined,
+      // Send full stock objects so the server has marketCap from NASDAQ screener
+      universe: universe.stocks.length > 0
+        ? universe.stocks.map(s => ({ symbol: s.symbol, name: s.name, marketCap: s.marketCap ?? null }))
+        : undefined,
     }, { timeout: 30000 }); // longer timeout when sending universe
+
+    // Mark first-successful-register timestamp so we don't re-register on every app launch
+    const { serverRegisteredAt, save } = useSettingsStore.getState();
+    if (!serverRegisteredAt) await save({ serverRegisteredAt: Date.now() });
 
     return { ok: true, message: res.data.message };
   } catch (e: any) {

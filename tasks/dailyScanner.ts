@@ -10,6 +10,7 @@ import { useSettingsStore } from '../store/settingsStore';
 import { useSignalsStore } from '../store/signalsStore';
 import { Signal, ScanUniverseStock } from '../types';
 import { evaluateCriteria, meetsUniverseFilter } from '../utils/technicalAnalysis';
+import { registerWithServer } from '../services/serverSync';
 
 // Foreground service — keeps Android from killing the app during long scans
 // register() MUST be called at module level before start() is ever called
@@ -26,12 +27,13 @@ if (Platform.OS === 'android') {
   }
 }
 
-async function startForegroundService(current: number, total: number) {
+export async function startForegroundService(current: number, total: number, mode: 'local' | 'cloud' = 'local') {
   if (!ForegroundService) return;
+  const title = mode === 'cloud' ? 'Nasduck — Cloud Scan' : 'Nasduck — Scanning';
   try {
     await ForegroundService.start({
       id: 1,
-      title: 'Nasduck — Scanning',
+      title,
       message: `Scanning ${current}/${total} stocks…`,
       importance: 'high',
       ServiceType: 'dataSync',
@@ -43,12 +45,13 @@ async function startForegroundService(current: number, total: number) {
   } catch (e) { console.log('[FG] Start error:', e); }
 }
 
-async function updateForegroundService(current: number, total: number, signals: number) {
+export async function updateForegroundService(current: number, total: number, signals: number, mode: 'local' | 'cloud' = 'local') {
   if (!ForegroundService) return;
+  const title = mode === 'cloud' ? 'Nasduck — Cloud Scan' : 'Nasduck — Scanning';
   try {
     await ForegroundService.update({
       id: 1,
-      title: 'Nasduck — Scanning',
+      title,
       message: `Scanning ${current}/${total} stocks… ${signals} signals`,
       ServiceType: 'dataSync',
       ongoing: true,
@@ -56,7 +59,7 @@ async function updateForegroundService(current: number, total: number, signals: 
   } catch (_) {}
 }
 
-async function stopForegroundService() {
+export async function stopForegroundService() {
   if (!ForegroundService) return;
   try { await ForegroundService.stop(); } catch (_) {}
 }
@@ -117,10 +120,24 @@ export async function buildUniverse(): Promise<boolean> {
     const nasdaqData = await fetchNasdaqByMarketCap(universeTier);
     console.log(`[Universe] NASDAQ screener returned ${nasdaqData.size} stocks (tier >$${universeTier}B)`);
 
-    const stocks = Array.from(nasdaqData.entries()).map(([symbol, v]) => ({ symbol, name: v.name }));
+    const stocks = Array.from(nasdaqData.entries()).map(([symbol, v]) => ({
+      symbol,
+      name: v.name,
+      marketCap: v.marketCap ?? null,
+    }));
     console.log(`[Universe] Built ${stocks.length} stocks`);
 
     await setUniverse(stocks);
+
+    // If cloud scan is enabled, push the new universe to the server
+    const { serverRegistered } = useSettingsStore.getState();
+    if (serverRegistered) {
+      console.log('[Universe] Cloud scan enabled — re-registering with new universe...');
+      const result = await registerWithServer();
+      if (result.ok) console.log('[Universe] Server universe updated');
+      else console.warn('[Universe] Failed to update server universe:', result.error);
+    }
+
     setUniverseBuildStatus('idle');
     return true;
   } catch (e: any) {
@@ -252,7 +269,9 @@ async function scanOneIteration(): Promise<void> {
     const fetchMs = Date.now() - fetchStart;
     if (fetchMs > 15000) console.warn(`[SCAN] fetchCandles(${stock.symbol}) took ${fetchMs}ms`);
 
-    const stockMarketCap = candles?.marketCap ?? null;
+    // Yahoo chart endpoint doesn't expose marketCap — use the value cached on the universe entry
+    // (sourced from NASDAQ screener at build time). Fall back to candles meta if ever present.
+    const stockMarketCap = stock.marketCap ?? candles?.marketCap ?? null;
 
     if (!candles || candles.close.length < 20) {
       incrementScanCounters({ noData: 1 });
@@ -271,7 +290,9 @@ async function scanOneIteration(): Promise<void> {
 
     if (ctx.marketCapFilterEnabled && !isPortfolioStock) {
       const minCap = ctx.minMarketCap * 1_000_000_000;
-      if (!stockMarketCap || stockMarketCap < minCap) {
+      // Only filter when we actually have a cap value. Unknown cap → let it through
+      // (the universe tier already enforces a coarse floor).
+      if (stockMarketCap != null && stockMarketCap < minCap) {
         incrementScanCounters({ filtered: 1 });
         ctx.i++;
         return;
@@ -394,7 +415,7 @@ async function finalizeScan() {
   await teardownScanTask();
 
   const { signals } = useSignalsStore.getState();
-  if (signals.length > 0) await sendScanNotification(signals);
+  await sendScanNotification(signals);
 }
 
 async function teardownScanTask() {
@@ -408,17 +429,28 @@ async function teardownScanTask() {
 async function sendScanNotification(signals: Signal[]) {
   const buyCount = signals.filter((s) => s.signal === 'buy').length;
   const sellCount = signals.filter((s) => s.signal === 'sell').length;
-  const parts: string[] = [];
-  if (buyCount > 0) parts.push(`${buyCount} buy signal${buyCount > 1 ? 's' : ''}`);
-  if (sellCount > 0) parts.push(`${sellCount} sell signal${sellCount > 1 ? 's' : ''}`);
+
+  let title: string;
+  let body: string;
+  if (signals.length === 0) {
+    title = '✅ Nasduck — Scan complete';
+    body = 'No signals matched your criteria.';
+  } else {
+    const parts: string[] = [];
+    if (buyCount > 0) parts.push(`${buyCount} buy signal${buyCount > 1 ? 's' : ''}`);
+    if (sellCount > 0) parts.push(`${sellCount} sell signal${sellCount > 1 ? 's' : ''}`);
+    title = '📊 Nasduck — Signals found';
+    body = `${parts.join(', ')}. Tap to review.`;
+  }
 
   try {
     await Notifications.scheduleNotificationAsync({
       content: {
-        title: '📊 Nasduck — Signals found',
-        body: `${parts.join(', ')}. Tap to review.`,
+        title,
+        body,
         data: { screen: 'signals' },
         sound: 'default',
+        ...(Platform.OS === 'android' ? { channelId: 'nasduck-alerts' } : {}),
       },
       trigger: null,
     });
@@ -449,6 +481,7 @@ export async function scheduleDailyNotification(hour: number, minute: number) {
         body: 'Open Nasduck to run your daily stock scan.',
         data: { screen: 'signals' },
         sound: 'default',
+        ...(Platform.OS === 'android' ? { channelId: 'nasduck-alerts' } : {}),
       },
       trigger: {
         type: Notifications.SchedulableTriggerInputTypes.DAILY,

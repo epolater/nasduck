@@ -24,14 +24,19 @@ const TIERS: { label: string; value: number; desc: string }[] = [
 
 export default function UniverseScreen() {
   const { universe, universeBuild, skipList } = useScanStore();
-  const { universeTier, save } = useSettingsStore();
+  const { universeTier, serverRegistered, save } = useSettingsStore();
   const isBuilding = universeBuild.status === 'running';
+
+  // Cloud scan can't handle very large universes — force Mid+ minimum
+  const CLOUD_MIN_TIER = 2;
+  const cloudLocksTier = serverRegistered;
 
   const universeAge = universe.lastUpdated
     ? Math.floor((Date.now() - universe.lastUpdated) / 86400000)
     : null;
 
   async function handleTierSelect(value: number) {
+    if (cloudLocksTier && value < CLOUD_MIN_TIER) return;
     await save({ universeTier: value });
   }
 
@@ -44,15 +49,22 @@ export default function UniverseScreen() {
         <Text style={styles.sectionDesc}>
           Coarse market cap filter used when building the universe. Precise filtering is applied per-stock during the scan.
         </Text>
+        {cloudLocksTier && (
+          <Text style={[styles.sectionDesc, { color: COLORS.primary }]}>
+            Cloud scan is enabled — minimum tier is Mid+ to keep server scans fast.
+          </Text>
+        )}
 
         <View style={styles.tierRow}>
           {TIERS.map((t) => {
             const active = universeTier === t.value;
+            const disabled = cloudLocksTier && t.value < CLOUD_MIN_TIER;
             return (
               <TouchableOpacity
                 key={t.value}
-                style={[styles.tierBtn, active && styles.tierBtnActive]}
+                style={[styles.tierBtn, active && styles.tierBtnActive, disabled && { opacity: 0.35 }]}
                 onPress={() => handleTierSelect(t.value)}
+                disabled={disabled}
               >
                 <Text style={[styles.tierLabel, active && styles.tierLabelActive]}>{t.label}</Text>
                 <Text style={[styles.tierDesc, active && styles.tierDescActive]}>{t.desc}</Text>
