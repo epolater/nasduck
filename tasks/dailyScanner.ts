@@ -1,7 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import { CRITERIA_WEIGHTS, RATE_LIMIT_MS, UNIVERSE_MIN_PRICE, UNIVERSE_MIN_VOLUME } from '../constants';
-import { delay, fetchCandles, fetchMarketCap, fetchNasdaqSymbols, fetchQuote, getApiKey } from '../services/finnhub';
+import { delay, fetchCandles, fetchNasdaqSymbols, fetchQuote, getApiKey } from '../services/finnhub';
 import { fetchOptionsData } from '../services/options';
 import { useCriteriaStore } from '../store/criteriaStore';
 import { usePortfolioStore } from '../store/portfolioStore';
@@ -175,10 +175,9 @@ async function _runDailyScanCore(): Promise<void> {
       const signalCount = useSignalsStore.getState().signals.length;
       await updateForegroundService(i + 1, targets.length, signalCount);
     }
-    const [candles, stockMarketCap] = await Promise.all([
-      fetchCandles(stock.symbol, 'D', from, to),
-      marketCapFilterEnabled ? fetchMarketCap(stock.symbol) : Promise.resolve(null),
-    ]);
+    const candles = await fetchCandles(stock.symbol, 'D', from, to);
+    // Use market cap from Yahoo Finance candles response (free, no extra API call)
+    const stockMarketCap = candles?.marketCap ?? null;
 
     if (scanAbortFlag) {
       await saveResumeIndex(i);

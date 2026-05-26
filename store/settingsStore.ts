@@ -32,7 +32,7 @@ const DEFAULTS: Settings = {
   scanWeekends: false,
   minChangePct: DEFAULT_MIN_CHANGE_PCT,
   minScore: 1,
-  minMarketCap: 0,
+  minMarketCap: 1,
   aiModel: 'gemini-2.0-flash' as AiModelId,
   googleAiKey: '',
   groqKey: '',
