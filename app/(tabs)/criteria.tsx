@@ -106,6 +106,9 @@ export default function CriteriaScreen() {
           <Text style={styles.minScoreDesc}>
             {minMarketCap === 0 ? 'No filter — all stocks included' : `Skip stocks below $${minMarketCap}B market cap`}
           </Text>
+          <Text style={styles.minScoreDesc}>
+            ⚠️ Rebuild universe after changing this setting.
+          </Text>
         </View>
         <View style={styles.stepper}>
           <TouchableOpacity style={styles.stepperBtn} onPress={() => saveSettings({ minMarketCap: Math.max(0, parseFloat((minMarketCap - 0.1).toFixed(1))) })}>
