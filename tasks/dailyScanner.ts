@@ -1,7 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import { CRITERIA_WEIGHTS, RATE_LIMIT_MS, UNIVERSE_MIN_PRICE, UNIVERSE_MIN_VOLUME } from '../constants';
-import { delay, fetchCandles, fetchNasdaqSymbols, fetchYahooBulkQuotes, fetchQuote, getApiKey } from '../services/finnhub';
+import { delay, fetchCandles, fetchNasdaqSymbols, fetchNasdaqByMarketCap, fetchQuote, getApiKey } from '../services/finnhub';
 import { fetchOptionsData } from '../services/options';
 import { useCriteriaStore } from '../store/criteriaStore';
 import { usePortfolioStore } from '../store/portfolioStore';
@@ -111,31 +111,20 @@ export async function buildUniverse(): Promise<boolean> {
     const allStocks = await fetchNasdaqSymbols();
     console.log(`[Universe] Fetched ${allStocks.length} symbols from Finnhub`);
 
-    // Step 2: bulk fetch market cap from Yahoo Finance (~30 requests for 3000 stocks)
-    const symbols = allStocks.map(s => s.symbol);
-    const yahooData = await fetchYahooBulkQuotes(symbols, (done, total) => {
-      setUniverseBuildStatus('running', done, total);
-    });
-    console.log(`[Universe] Yahoo bulk fetch complete: ${yahooData.size} quotes received`);
-
-    // Step 3: filter by minMarketCap and enrich names from Yahoo
+    // Step 2: get filtered stock list from NASDAQ screener (1 request)
     const { minMarketCap } = useSettingsStore.getState();
-    const minCapBytes = minMarketCap > 0 ? minMarketCap * 1_000_000_000 : 0;
+    setUniverseBuildStatus('running', 1, 2);
 
-    const filtered = allStocks
-      .map(s => {
-        const yahoo = yahooData.get(s.symbol);
-        return {
-          symbol: s.symbol,
-          name: yahoo?.name ?? s.name,
-          marketCap: yahoo?.marketCap ?? null,
-        };
-      })
-      .filter(s => {
-        if (minCapBytes === 0) return true;
-        if (s.marketCap === null) return false; // exclude if market cap unknown when filter is active
-        return s.marketCap >= minCapBytes;
-      });
+    let filtered: ScanUniverseStock[];
+    if (minMarketCap > 0) {
+      const nasdaqData = await fetchNasdaqByMarketCap(minMarketCap);
+      console.log(`[Universe] NASDAQ screener returned ${nasdaqData.size} stocks above $${minMarketCap}B`);
+      // Keep only stocks that are in both Finnhub list and NASDAQ screener
+      filtered = allStocks.filter(s => nasdaqData.has(s.symbol))
+        .map(s => ({ symbol: s.symbol, name: nasdaqData.get(s.symbol)?.name ?? s.name }));
+    } else {
+      filtered = allStocks;
+    }
 
     console.log(`[Universe] After market cap filter (>${minMarketCap}B): ${filtered.length} stocks`);
 

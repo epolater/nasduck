@@ -136,35 +136,39 @@ export function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Bulk fetch market cap + name from Yahoo Finance for a list of symbols
-// Returns a map of symbol → { marketCap, name }
-export async function fetchYahooBulkQuotes(
-  symbols: string[],
-  onProgress?: (done: number, total: number) => void,
+// Fetch NASDAQ stocks filtered by market cap using NASDAQ's own screener API
+// marketCap: 'mega' (>200B), 'large' (10-200B), 'mid' (2-10B), 'small' (300M-2B)
+export async function fetchNasdaqByMarketCap(
+  minCapBillions: number,
 ): Promise<Map<string, { marketCap: number | null; name: string }>> {
   const result = new Map<string, { marketCap: number | null; name: string }>();
-  const BATCH = 100;
 
-  for (let i = 0; i < symbols.length; i += BATCH) {
-    const batch = symbols.slice(i, i + BATCH);
-    try {
-      const joined = batch.join(',');
-      const { data } = await axios.get(
-        `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${joined}&fields=symbol,shortName,regularMarketCap`,
-        { timeout: 15000 },
-      );
-      const quotes: any[] = data?.quoteResponse?.result ?? [];
-      for (const q of quotes) {
-        result.set(q.symbol, {
-          marketCap: typeof q.regularMarketCap === 'number' ? q.regularMarketCap : null,
-          name: q.shortName ?? q.symbol,
+  // Determine which tiers to include based on minimum cap
+  const tiers: string[] = [];
+  if (minCapBillions >= 200) tiers.push('mega');
+  else if (minCapBillions >= 10) { tiers.push('mega'); tiers.push('large'); }
+  else if (minCapBillions >= 2) { tiers.push('mega'); tiers.push('large'); tiers.push('mid'); }
+  else { tiers.push('mega'); tiers.push('large'); tiers.push('mid'); tiers.push('small'); }
+
+  const marketcap = tiers.join('%7C'); // URL-encode |
+
+  try {
+    const { data } = await axios.get(
+      `https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=9999&exchange=NASDAQ&marketcap=${marketcap}`,
+      { timeout: 20000, headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } },
+    );
+    const rows: any[] = data?.data?.table?.rows ?? [];
+    console.log(`[NasdaqScreener] Got ${rows.length} stocks for tiers: ${tiers.join(',')}`);
+    for (const row of rows) {
+      if (row.symbol && !row.symbol.includes('/') && !row.symbol.includes('^')) {
+        result.set(row.symbol, {
+          marketCap: null, // not needed, already filtered by tier
+          name: row.name ?? row.symbol,
         });
       }
-    } catch (_) {
-      // batch failed — skip, symbols won't appear in result
     }
-    onProgress?.(Math.min(i + BATCH, symbols.length), symbols.length);
-    if (i + BATCH < symbols.length) await delay(300); // gentle rate limiting
+  } catch (e: any) {
+    console.log('[NasdaqScreener] Error:', e?.response?.status, e?.message);
   }
 
   return result;
