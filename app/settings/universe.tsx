@@ -12,21 +12,57 @@ import { Stack } from 'expo-router';
 import { COLORS } from '../../constants';
 import { useScanStore } from '../../store/scanStore';
 import { useSettingsStore } from '../../store/settingsStore';
-import { buildUniverse, abortUniverseBuild } from '../../tasks/dailyScanner';
+import { buildUniverse } from '../../tasks/dailyScanner';
+
+const TIERS: { label: string; value: number; desc: string }[] = [
+  { label: 'All',     value: 0,   desc: 'No filter' },
+  { label: 'Small+',  value: 0.3, desc: '>$300M' },
+  { label: 'Mid+',    value: 2,   desc: '>$2B' },
+  { label: 'Large+',  value: 10,  desc: '>$10B' },
+  { label: 'Mega',    value: 200, desc: '>$200B' },
+];
 
 export default function UniverseScreen() {
-  const { apiKey } = useSettingsStore();
   const { universe, universeBuild, skipList } = useScanStore();
+  const { universeTier, save } = useSettingsStore();
   const isBuilding = universeBuild.status === 'running';
 
   const universeAge = universe.lastUpdated
     ? Math.floor((Date.now() - universe.lastUpdated) / 86400000)
     : null;
 
+  async function handleTierSelect(value: number) {
+    await save({ universeTier: value });
+  }
+
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <Stack.Screen options={{ title: 'Scan Universe' }} />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+
+        <Text style={styles.sectionLabel}>UNIVERSE TIER</Text>
+        <Text style={styles.sectionDesc}>
+          Coarse market cap filter used when building the universe. Precise filtering is applied per-stock during the scan.
+        </Text>
+
+        <View style={styles.tierRow}>
+          {TIERS.map((t) => {
+            const active = universeTier === t.value;
+            return (
+              <TouchableOpacity
+                key={t.value}
+                style={[styles.tierBtn, active && styles.tierBtnActive]}
+                onPress={() => handleTierSelect(t.value)}
+              >
+                <Text style={[styles.tierLabel, active && styles.tierLabelActive]}>{t.label}</Text>
+                <Text style={[styles.tierDesc, active && styles.tierDescActive]}>{t.desc}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <View style={styles.divider} />
+
         <Text style={styles.sectionLabel}>SCAN UNIVERSE</Text>
         <Text style={styles.sectionDesc}>
           The list of NASDAQ stocks checked in buy scans. Refresh weekly to include new listings.
@@ -55,12 +91,12 @@ export default function UniverseScreen() {
             )}
           </View>
           <TouchableOpacity
-            style={[styles.btn, styles.btnOutline, (!apiKey || isBuilding) && { opacity: 0.4 }]}
+            style={[styles.buildBtn, isBuilding && { opacity: 0.4 }]}
             onPress={() => buildUniverse()}
-            disabled={!apiKey || isBuilding}
+            disabled={isBuilding}
           >
-            <Text style={styles.btnOutlineText}>
-              {universe.stocks.length > 0 ? 'Refresh' : 'Build Universe'}
+            <Text style={styles.buildBtnText}>
+              {universe.stocks.length > 0 ? 'Rebuild' : 'Build Universe'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -71,9 +107,6 @@ export default function UniverseScreen() {
           </Text>
         )}
 
-        <Text style={styles.note}>
-          Fetches all NASDAQ common stocks (≤4 char symbols). Price/volume filtering happens automatically during the first scan via the skip list.
-        </Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -86,7 +119,20 @@ const styles = StyleSheet.create({
     color: COLORS.textMuted, fontSize: 10, fontWeight: '700',
     letterSpacing: 1.5, marginBottom: 6,
   },
-  sectionDesc: { color: COLORS.textSecondary, fontSize: 13, marginBottom: 10, lineHeight: 18 },
+  sectionDesc: { color: COLORS.textSecondary, fontSize: 13, marginBottom: 12, lineHeight: 18 },
+  divider: { height: 1, backgroundColor: COLORS.border, marginVertical: 20 },
+  tierRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginBottom: 4 },
+  tierBtn: {
+    flex: 1, minWidth: 56,
+    backgroundColor: COLORS.surface, borderRadius: 10,
+    borderWidth: 1, borderColor: COLORS.border,
+    paddingVertical: 10, alignItems: 'center',
+  },
+  tierBtnActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  tierLabel: { color: COLORS.text, fontWeight: '700', fontSize: 13 },
+  tierLabelActive: { color: '#000' },
+  tierDesc: { color: COLORS.textMuted, fontSize: 10, marginTop: 2 },
+  tierDescActive: { color: '#000' },
   universeInfo: {
     flexDirection: 'row', justifyContent: 'space-between',
     alignItems: 'center', marginBottom: 8,
@@ -96,14 +142,9 @@ const styles = StyleSheet.create({
   universeError: { color: COLORS.sell, fontSize: 12, marginTop: 4 },
   buildingTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   buildingText: { flex: 1, color: COLORS.text, fontSize: 13 },
-  btn: {
+  buildBtn: {
     backgroundColor: COLORS.primary, borderRadius: 10,
-    paddingVertical: 12, alignItems: 'center',
+    paddingHorizontal: 16, paddingVertical: 10,
   },
-  btnOutline: {
-    backgroundColor: 'transparent', borderWidth: 1, borderColor: COLORS.primary,
-    paddingHorizontal: 16, paddingVertical: 10, minWidth: 120,
-  },
-  btnOutlineText: { color: COLORS.primary, fontWeight: '700', fontSize: 13 },
-  note: { color: COLORS.textMuted, fontSize: 11, lineHeight: 16, marginTop: 4 },
+  buildBtnText: { color: '#000', fontWeight: '700', fontSize: 13 },
 });

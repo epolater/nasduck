@@ -1,38 +1,6 @@
 import axios from 'axios';
-import { FINNHUB_BASE_URL, RATE_LIMIT_MS } from '../constants';
+
 import { CandleData, ScanUniverseStock } from '../types';
-
-let apiKey = '';
-
-export function setApiKey(key: string) {
-  apiKey = key;
-}
-
-export function getApiKey() {
-  return apiKey;
-}
-
-function url(path: string, params: Record<string, string | number>) {
-  const qs = new URLSearchParams({
-    token: apiKey,
-    ...Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])),
-  });
-  return `${FINNHUB_BASE_URL}${path}?${qs}`;
-}
-
-export async function fetchNasdaqSymbols(): Promise<ScanUniverseStock[]> {
-  const { data } = await axios.get(url('/stock/symbol', { exchange: 'US' }));
-  return (data as any[])
-    .filter(
-      (s) =>
-        s.mic === 'XNAS' &&
-        s.type === 'Common Stock' &&
-        !s.symbol.includes('.') &&
-        !s.symbol.includes('-') &&
-        s.symbol.length <= 4,          // ≤4 chars = established liquid stocks
-    )
-    .map((s) => ({ symbol: s.symbol as string, name: s.description as string }));
-}
 
 // Uses Yahoo Finance (free, no API key) for historical daily candles.
 // Finnhub free tier does not include the /stock/candle endpoint.
@@ -88,47 +56,37 @@ export async function fetchCandles(
   }
 }
 
+// Yahoo Finance — live quote (latest close + change %)
 export async function fetchQuote(symbol: string): Promise<{ price: number; changePercent: number } | null> {
   try {
-    const { data } = await axios.get(url('/quote', { symbol }));
-    return { price: data.c, changePercent: data.dp };
+    const { data } = await axios.get(
+      `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=5d`,
+      { timeout: 8000 },
+    );
+    const m = data?.chart?.result?.[0]?.meta;
+    if (!m) return null;
+    const price = m.regularMarketPrice ?? m.previousClose;
+    const prev = m.chartPreviousClose ?? m.previousClose;
+    const changePercent = prev > 0 ? ((price - prev) / prev) * 100 : 0;
+    return { price, changePercent };
   } catch (_) {
     return null;
   }
 }
 
-export async function fetchMarketCap(symbol: string): Promise<number | null> {
-  try {
-    // Finnhub profile2 returns marketCapitalization in millions USD
-    const { data } = await axios.get(url('/stock/profile2', { symbol }), { timeout: 8000 });
-    if (typeof data?.marketCapitalization === 'number' && data.marketCapitalization > 0) {
-      return data.marketCapitalization * 1_000_000;
-    }
-    return null;
-  } catch (_) {
-    return null;
-  }
-}
-
+// Yahoo Finance — symbol search
 export async function searchSymbol(query: string): Promise<ScanUniverseStock[]> {
   try {
-    const { data } = await axios.get(url('/search', { q: query }));
-    return (data.result || [])
-      .filter((r: any) => r.type === 'Common Stock')
+    const { data } = await axios.get(
+      `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&lang=en-US&region=US&quotesCount=15&newsCount=0&enableFuzzyQuery=false`,
+      { timeout: 8000 },
+    );
+    return (data?.quotes ?? [])
+      .filter((r: any) => r.quoteType === 'EQUITY' && !r.symbol?.includes('.'))
       .slice(0, 15)
-      .map((r: any) => ({ symbol: r.symbol, name: r.description }));
+      .map((r: any) => ({ symbol: r.symbol, name: r.longname ?? r.shortname ?? r.symbol }));
   } catch (_) {
     return [];
-  }
-}
-
-export async function validateApiKey(key: string): Promise<boolean> {
-  try {
-    const qs = new URLSearchParams({ token: key, symbol: 'AAPL' });
-    const { data } = await axios.get(`${FINNHUB_BASE_URL}/quote?${qs}`, { timeout: 8000 });
-    return typeof data.c === 'number' && data.c > 0;
-  } catch (_) {
-    return false;
   }
 }
 
@@ -150,15 +108,16 @@ export async function fetchNasdaqByMarketCap(
   else if (minCapBillions >= 2) { tiers.push('mega'); tiers.push('large'); tiers.push('mid'); }
   else { tiers.push('mega'); tiers.push('large'); tiers.push('mid'); tiers.push('small'); }
 
-  const marketcap = tiers.join('%7C'); // URL-encode |
+  // If no market cap filter, fetch all stocks without the marketcap query param
+  const marketcapParam = minCapBillions > 0 ? `&marketcap=${tiers.join('%7C')}` : '';
 
   try {
     const { data } = await axios.get(
-      `https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=9999&exchange=NASDAQ&marketcap=${marketcap}`,
+      `https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=9999&exchange=NASDAQ${marketcapParam}`,
       { timeout: 20000, headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } },
     );
     const rows: any[] = data?.data?.table?.rows ?? [];
-    console.log(`[NasdaqScreener] Got ${rows.length} stocks for tiers: ${tiers.join(',')}`);
+    console.log(`[NasdaqScreener] Got ${rows.length} stocks${minCapBillions > 0 ? ` for tiers: ${tiers.join(',')}` : ' (no market cap filter)'}`);
     for (const row of rows) {
       if (row.symbol && !row.symbol.includes('/') && !row.symbol.includes('^')) {
         result.set(row.symbol, {

@@ -17,7 +17,6 @@ import Svg, { Circle, Line } from 'react-native-svg';
 import { COLORS } from '../../constants';
 import { fetchQuote, searchSymbol } from '../../services/finnhub';
 import { usePortfolioStore } from '../../store/portfolioStore';
-import { useSettingsStore } from '../../store/settingsStore';
 import { PortfolioStock } from '../../types';
 import { DraggableList } from '../../components/DraggableList';
 
@@ -31,7 +30,6 @@ export default function PortfolioScreen() {
   const { stocks, add, remove, reorder } = usePortfolioStore();
   const scrollRef = useRef<ScrollView>(null);
   const [editMode, setEditMode] = useState(false);
-  const { apiKey } = useSettingsStore();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<{ symbol: string; name: string }[]>([]);
   const [searching, setSearching] = useState(false);
@@ -40,9 +38,9 @@ export default function PortfolioScreen() {
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (stocks.length === 0 || !apiKey) return;
+    if (stocks.length === 0) return;
     loadQuotes();
-  }, [stocks.map((s) => s.symbol).join(','), apiKey]);
+  }, [stocks.map((s) => s.symbol).join(',')]);
 
   async function loadQuotes() {
     setLoadingQuotes(true);
@@ -68,7 +66,7 @@ export default function PortfolioScreen() {
   function handleQueryChange(text: string) {
     setQuery(text);
     if (searchTimer.current) clearTimeout(searchTimer.current);
-    if (!text.trim() || !apiKey) { setResults([]); return; }
+    if (!text.trim()) { setResults([]); return; }
     searchTimer.current = setTimeout(async () => {
       setSearching(true);
       const r = await searchSymbol(text.trim());
@@ -100,9 +98,8 @@ export default function PortfolioScreen() {
           style={styles.input}
           value={query}
           onChangeText={handleQueryChange}
-          placeholder={apiKey ? 'Search to add a stock…' : 'Set API key in Settings first'}
+          placeholder="Search to add a stock…"
           placeholderTextColor={COLORS.textMuted}
-          editable={!!apiKey}
         />
         <View style={styles.searchIconWrap} pointerEvents="none">
           {searching

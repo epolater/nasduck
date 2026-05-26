@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import Svg, { Line, Polyline, Text as SvgText } from 'react-native-svg';
 import { COLORS } from '../../constants';
-import { fetchCandles, fetchMarketCap } from '../../services/finnhub';
+import { fetchCandles } from '../../services/finnhub';
 import { analyzeStock, chatWithAi, buildStockContext, ChatMessage } from '../../services/ai';
 import { fetchOptionsData, OptionsData } from '../../services/options';
 import { useAiAnalysisStore } from '../../store/aiAnalysisStore';
@@ -186,13 +186,9 @@ export default function StockDetailScreen() {
     try {
       const to = Math.floor(Date.now() / 1000);
       const from = to - 86400 * 260;
-      const [c, cap] = await Promise.all([
-        fetchCandles(symbol, 'D', from, to),
-        fetchMarketCap(symbol),
-      ]);
+      const c = await fetchCandles(symbol, 'D', from, to);
       setCandles(c);
-      // Prefer Yahoo Finance market cap from candles (no API key needed), fall back to Finnhub
-      setMarketCap(c?.marketCap ?? cap);
+      setMarketCap(c?.marketCap ?? null);
     } catch (_) {
     } finally {
       setLoading(false);

@@ -20,7 +20,7 @@ export async function registerWithServer(): Promise<{ ok: boolean; message?: str
     const tokenData = await Notifications.getExpoPushTokenAsync();
     const pushToken = tokenData.data;
 
-    const { apiKey, scanHour, scanMinute, scanWeekends, minChangePct, minScore, minMarketCap, criteriaWeights } = useSettingsStore.getState();
+    const { scanHour, scanMinute, scanWeekends, minChangePct, minScore, minMarketCap, criteriaWeights } = useSettingsStore.getState();
 
     // Convert local scan time to UTC so server schedules correctly regardless of timezone
     const localDate = new Date();
@@ -33,7 +33,6 @@ export async function registerWithServer(): Promise<{ ok: boolean; message?: str
     const res = await axios.post(`${CLOUD_SERVER_URL}/register`, {
       deviceId: getDeviceId(),
       pushToken,
-      apiKey,
       criteria: criteria.filter(c => c.enabled),
       matchMode,
       minChangePct,

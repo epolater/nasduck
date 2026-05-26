@@ -1,7 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import { CRITERIA_WEIGHTS, RATE_LIMIT_MS, UNIVERSE_MIN_PRICE, UNIVERSE_MIN_VOLUME } from '../constants';
-import { delay, fetchCandles, fetchNasdaqSymbols, fetchNasdaqByMarketCap, fetchQuote, getApiKey } from '../services/finnhub';
+import { delay, fetchCandles, fetchNasdaqByMarketCap } from '../services/finnhub';
 import { fetchOptionsData } from '../services/options';
 import { useCriteriaStore } from '../store/criteriaStore';
 import { usePortfolioStore } from '../store/portfolioStore';
@@ -12,9 +12,18 @@ import { Signal, ScanUniverseStock } from '../types';
 import { evaluateCriteria, meetsUniverseFilter } from '../utils/technicalAnalysis';
 
 // Foreground service — keeps Android from killing the app during long scans
+// register() MUST be called at module level before start() is ever called
 let ForegroundService: any = null;
 if (Platform.OS === 'android') {
   ForegroundService = (require('@supersami/rn-foreground-service') as any).default;
+  // Register the headless JS task that the native service runner expects.
+  // Without this, runTask() (called internally by start()) silently fails.
+  try {
+    ForegroundService.register({ config: { alert: false } });
+    console.log('[FG] Registered foreground task');
+  } catch (e) {
+    console.log('[FG] Register error:', e);
+  }
 }
 
 async function startForegroundService(total: number) {
@@ -24,9 +33,11 @@ async function startForegroundService(total: number) {
       id: 1,
       title: 'Nasduck — Scanning',
       message: `Scanning 0/${total} stocks…`,
-      importance: 'default',
+      importance: 'high',
       ServiceType: 'dataSync',
+      visibility: 'public',
       number: '0',
+      ongoing: true,
     });
     console.log('[FG] Foreground service started');
   } catch (e) { console.log('[FG] Start error:', e); }
@@ -39,13 +50,15 @@ async function updateForegroundService(current: number, total: number, signals: 
       id: 1,
       title: 'Nasduck — Scanning',
       message: `Scanning ${current}/${total} stocks… ${signals} signals`,
+      ServiceType: 'dataSync',
+      ongoing: true,
     });
   } catch (_) {}
 }
 
 async function stopForegroundService() {
   if (!ForegroundService) return;
-  try { await ForegroundService.stopAll(); } catch (_) {}
+  try { await ForegroundService.stop(); } catch (_) {}
 }
 
 let scanAbortFlag = false;
@@ -101,44 +114,30 @@ function buildTargets(): ScanUniverseStock[] {
 }
 
 export async function buildUniverse(): Promise<boolean> {
-  if (!getApiKey()) return false;
   const { setUniverseBuildStatus, setUniverse } = useScanStore.getState();
   universeBuildAbortFlag = false;
 
   try {
-    // Step 1: get all NASDAQ symbols from Finnhub (~1 API call)
-    setUniverseBuildStatus('running', 0, 0);
-    const allStocks = await fetchNasdaqSymbols();
-    console.log(`[Universe] Fetched ${allStocks.length} symbols from Finnhub`);
+    const { universeTier } = useSettingsStore.getState();
+    setUniverseBuildStatus('running', 0, 1);
 
-    // Step 2: get filtered stock list from NASDAQ screener (1 request)
-    const { minMarketCap } = useSettingsStore.getState();
-    setUniverseBuildStatus('running', 1, 2);
+    // Use NASDAQ screener tiers for coarse universe filtering
+    const nasdaqData = await fetchNasdaqByMarketCap(universeTier);
+    console.log(`[Universe] NASDAQ screener returned ${nasdaqData.size} stocks (tier >$${universeTier}B)`);
 
-    let filtered: ScanUniverseStock[];
-    if (minMarketCap > 0) {
-      const nasdaqData = await fetchNasdaqByMarketCap(minMarketCap);
-      console.log(`[Universe] NASDAQ screener returned ${nasdaqData.size} stocks above $${minMarketCap}B`);
-      // Keep only stocks that are in both Finnhub list and NASDAQ screener
-      filtered = allStocks.filter(s => nasdaqData.has(s.symbol))
-        .map(s => ({ symbol: s.symbol, name: nasdaqData.get(s.symbol)?.name ?? s.name }));
-    } else {
-      filtered = allStocks;
-    }
+    const stocks = Array.from(nasdaqData.entries()).map(([symbol, v]) => ({ symbol, name: v.name }));
+    console.log(`[Universe] Built ${stocks.length} stocks`);
 
-    console.log(`[Universe] After market cap filter (>${minMarketCap}B): ${filtered.length} stocks`);
-
-    await setUniverse(filtered.map(s => ({ symbol: s.symbol, name: s.name })));
+    await setUniverse(stocks);
     setUniverseBuildStatus('idle');
     return true;
   } catch (e: any) {
-    setUniverseBuildStatus('error', 0, 0, 'Failed to fetch symbols. Check your API key.');
+    setUniverseBuildStatus('error', 0, 0, 'Failed to fetch symbols from NASDAQ screener.');
     return false;
   }
 }
 
 export async function runDailyScan(): Promise<void> {
-  if (!getApiKey()) return;
   await _runDailyScanCore();
 }
 

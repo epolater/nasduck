@@ -17,7 +17,7 @@ import { registerWithServer } from '../../services/serverSync';
 import { useServerLogStore } from '../../store/serverLogStore';
 
 export default function CloudScreen() {
-  const { apiKey, serverRegistered, save } = useSettingsStore();
+  const { serverRegistered, save } = useSettingsStore();
   const [serverStatus, setServerStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle');
   const [serverMsg, setServerMsg] = useState('');
   const [logExpanded, setLogExpanded] = useState(false);
@@ -70,7 +70,7 @@ export default function CloudScreen() {
             }}
             trackColor={{ false: COLORS.border, true: COLORS.primary }}
             thumbColor={serverRegistered ? '#fff' : COLORS.textMuted}
-            disabled={serverStatus === 'loading' || !apiKey}
+            disabled={serverStatus === 'loading'}
           />
         </View>
 

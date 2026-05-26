@@ -17,7 +17,7 @@ import {
 const ROW_H    = 40;
 const HEADER_H = 36;
 import { COLORS, CLOUD_SERVER_URL } from '../../constants';
-import { getApiKey } from '../../services/finnhub';
+
 import { useCriteriaStore } from '../../store/criteriaStore';
 import { useScanStore } from '../../store/scanStore';
 import { useSettingsStore } from '../../store/settingsStore';
@@ -313,7 +313,6 @@ export default function SignalsScreen() {
 
   function checkAndRunScan() {
     if (serverRegistered) return; // server handles its own schedule
-    if (!getApiKey()) return;
     if (isScanning) return;
     if (universe.stocks.length === 0) return;
     const { lastScanAt } = useScanStore.getState().scan;
@@ -434,9 +433,7 @@ export default function SignalsScreen() {
         </View>
       ) : (
         <View style={styles.statusBar}>
-          {!getApiKey() ? (
-            <Text style={styles.warningText}>⚠️ Set your Finnhub API key in Settings</Text>
-          ) : (!serverRegistered && universe.stocks.length === 0) ? (
+          {(!serverRegistered && universe.stocks.length === 0) ? (
             <Text style={styles.warningText}>⚠️ Build scan universe in Settings first</Text>
           ) : (
             <View style={{ flex: 1 }}>
@@ -467,7 +464,7 @@ export default function SignalsScreen() {
                   restartScan();
                 }
               }}
-              disabled={!getApiKey() || (!serverRegistered && universe.stocks.length === 0)}
+              disabled={!serverRegistered && universe.stocks.length === 0}
             >
               <Text style={styles.restartBtnText}>↺ Restart</Text>
             </TouchableOpacity>
@@ -479,7 +476,7 @@ export default function SignalsScreen() {
               (serverRegistered && cloudResumeIndex != null) && styles.scanBtnResume,
             ]}
             onPress={() => serverRegistered ? startCloudScan(false) : runDailyScan()}
-            disabled={!getApiKey() || (!serverRegistered && universe.stocks.length === 0)}
+            disabled={!serverRegistered && universe.stocks.length === 0}
           >
             {serverRegistered ? (
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>

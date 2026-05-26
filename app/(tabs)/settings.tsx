@@ -20,7 +20,7 @@ type MenuRow = {
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { apiKey, scanHour, scanMinute, minChangePct, aiModel, serverRegistered } = useSettingsStore();
+  const { scanHour, scanMinute, minChangePct, aiModel, serverRegistered } = useSettingsStore();
   const { universe } = useScanStore();
 
   const timeLabel = `${String(scanHour).padStart(2, '0')}:${String(scanMinute).padStart(2, '0')}`;
@@ -35,12 +35,6 @@ export default function SettingsScreen() {
       : 'Not built yet';
 
   const rows: MenuRow[] = [
-    {
-      key: 'finnhub',
-      title: 'Finnhub API Key',
-      subtitle: apiKey ? 'Connected' : 'Not configured',
-      subtitleColor: apiKey ? COLORS.buy : COLORS.sell,
-    },
     {
       key: 'universe',
       title: 'Scan Universe',

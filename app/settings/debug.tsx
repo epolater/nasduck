@@ -11,8 +11,7 @@ import {
 } from 'react-native';
 import { Stack } from 'expo-router';
 import { COLORS, CLOUD_SERVER_URL } from '../../constants';
-import { useSettingsStore } from '../../store/settingsStore';
-import { fetchCandles, fetchMarketCap } from '../../services/finnhub';
+import { fetchCandles } from '../../services/finnhub';
 import { fetchOptionsData } from '../../services/options';
 import { getDeviceId } from '../../services/serverSync';
 import axios from 'axios';
@@ -27,9 +26,7 @@ interface TestResult {
 const INIT: TestResult = { status: 'idle', output: '' };
 
 export default function DebugScreen() {
-  const { apiKey } = useSettingsStore();
   const [yahoo, setYahoo]     = useState<TestResult>(INIT);
-  const [finnhub, setFinnhub] = useState<TestResult>(INIT);
   const [options, setOptions] = useState<TestResult>(INIT);
   const [server, setServer]   = useState<TestResult>(INIT);
 
@@ -56,24 +53,6 @@ export default function DebugScreen() {
       });
     } catch (e: any) {
       setYahoo({ status: 'error', output: `Error: ${e?.message ?? String(e)}` });
-    }
-  }
-
-  async function testFinnhub() {
-    if (!apiKey) {
-      setFinnhub({ status: 'error', output: 'No API key set. Add your Finnhub key in Settings → Finnhub API.' });
-      return;
-    }
-    setFinnhub({ status: 'loading', output: '' });
-    try {
-      const cap = await fetchMarketCap('AAPL');
-      if (cap == null) {
-        setFinnhub({ status: 'error', output: 'Returned null. Check your Finnhub API key.' });
-      } else {
-        setFinnhub({ status: 'ok', output: `✓ AAPL market cap: $${(cap / 1e12).toFixed(2)}T` });
-      }
-    } catch (e: any) {
-      setFinnhub({ status: 'error', output: `Error: ${e?.message ?? String(e)}` });
     }
   }
 
@@ -127,10 +106,10 @@ export default function DebugScreen() {
   }
 
   async function testAll() {
-    await Promise.all([testYahoo(), testFinnhub(), testOptions(), testServer()]);
+    await Promise.all([testYahoo(), testOptions(), testServer()]);
   }
 
-  const anyLoading = [yahoo, finnhub, options, server].some(r => r.status === 'loading');
+  const anyLoading = [yahoo, options, server].some(r => r.status === 'loading');
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -161,14 +140,6 @@ export default function DebugScreen() {
         />
 
         <TestBlock
-          label="FINNHUB — MARKET CAP"
-          desc="Requires your Finnhub API key"
-          buttonText="Test Market Cap"
-          result={finnhub}
-          onPress={testFinnhub}
-        />
-
-        <TestBlock
           label="MARKETDATA.APP — OPTIONS"
           desc="Put/call ratio, max pain, IV (no API key, 100 req/day free)"
           buttonText="Test Options (AAPL)"
@@ -190,7 +161,7 @@ export default function DebugScreen() {
           Nasduck v2.0{'\n'}
           Price data: Yahoo Finance{'\n'}
           Options data: marketdata.app{'\n'}
-          Symbol universe: Finnhub.io{'\n'}
+          Symbol universe: NASDAQ Screener{'\n'}
           Not financial advice.
         </Text>
 

@@ -6,20 +6,24 @@ module.exports = function withForegroundServiceType(config) {
     const app = manifest.manifest.application[0];
     if (!app.service) app.service = [];
 
-    const existing = app.service.find(
-      (s) => s.$?.['android:name']?.includes('ForegroundService')
-    );
-    if (!existing) {
-      app.service.push({
-        $: {
-          'android:name': 'com.supersami.foregroundservice.ForegroundService',
-          'android:foregroundServiceType': 'dataSync',
-          'android:exported': 'false',
-        },
-      });
-    } else {
-      existing.$['android:foregroundServiceType'] = 'dataSync';
+    function ensureService(name, extra = {}) {
+      const existing = app.service.find((s) => s.$?.['android:name'] === name);
+      if (!existing) {
+        app.service.push({ $: { 'android:name': name, 'android:foregroundServiceType': 'dataSync', 'android:exported': 'false', ...extra } });
+      } else {
+        existing.$['android:foregroundServiceType'] = 'dataSync';
+        Object.assign(existing.$, extra);
+      }
     }
+
+    // Persistent notification service — keeps the process alive while scanning
+    ensureService('com.supersami.foregroundservice.ForegroundService');
+
+    // Headless JS task runner — required for runTask() called inside start()
+    ensureService('com.supersami.foregroundservice.ForegroundServiceTask', {
+      'android:permission': 'android.permission.BIND_JOB_SERVICE',
+    });
+
     return config;
   });
 };

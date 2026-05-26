@@ -100,25 +100,13 @@ export default function CriteriaScreen() {
       </View>
 
       {/* Min Market Cap */}
-      <View style={styles.minScoreCard}>
-        <View style={styles.minScoreLeft}>
+      <View style={styles.minCapCard}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
           <Text style={styles.minScoreTitle}>Minimum Market Cap</Text>
-          <Text style={styles.minScoreDesc}>
-            {minMarketCap === 0 ? 'No filter — all stocks included' : `Skip stocks below $${minMarketCap}B market cap`}
-          </Text>
-          <Text style={styles.minScoreDesc}>
-            ⚠️ Rebuild universe after changing this setting.
-          </Text>
+          <Text style={styles.capValue}>{minMarketCap === 0 ? 'Off' : `$${minMarketCap}B`}</Text>
         </View>
-        <View style={styles.stepper}>
-          <TouchableOpacity style={styles.stepperBtn} onPress={() => saveSettings({ minMarketCap: Math.max(0, parseFloat((minMarketCap - 0.1).toFixed(1))) })}>
-            <Text style={styles.stepperBtnText}>−</Text>
-          </TouchableOpacity>
-          <Text style={styles.stepperValue}>{minMarketCap === 0 ? 'Off' : `$${minMarketCap}B`}</Text>
-          <TouchableOpacity style={styles.stepperBtn} onPress={() => saveSettings({ minMarketCap: parseFloat((minMarketCap + 0.1).toFixed(1)) })}>
-            <Text style={styles.stepperBtnText}>+</Text>
-          </TouchableOpacity>
-        </View>
+        <CapSlider value={minMarketCap} onChange={(v) => saveSettings({ minMarketCap: v })} />
+        <Text style={[styles.minScoreDesc, { marginTop: 10 }]}>Applied per-stock during scan. Universe tier is set separately in Settings → Scan Universe.</Text>
       </View>
 
       {/* Section header with edit toggle */}
@@ -464,6 +452,81 @@ function CriteriaCard({
   );
 }
 
+// Snap points for the market cap slider (in $B)
+const CAP_MAX = 100;
+
+function capLabel(v: number) {
+  return v === 0 ? 'Off' : `$${v}B`;
+}
+
+function CapSlider({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const trackRef = useRef<View>(null);
+  const trackWidth = useRef(0);
+  const trackPageX = useRef(0);
+
+  // Clamp stored value into 0–100 range (handles legacy values like 0.5, 200, 500)
+  const safeValue = Math.min(CAP_MAX, Math.max(0, Math.round(value)));
+
+  function valueFromPageX(pageX: number) {
+    const x = pageX - trackPageX.current;
+    const pct = Math.max(0, Math.min(1, x / trackWidth.current));
+    return Math.round(pct * CAP_MAX);
+  }
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (e) => onChange(valueFromPageX(e.nativeEvent.pageX)),
+      onPanResponderMove: (e) => onChange(valueFromPageX(e.nativeEvent.pageX)),
+    })
+  ).current;
+
+  const thumbPct = safeValue / CAP_MAX;
+
+  return (
+    <View>
+      <View
+        ref={trackRef}
+        style={sliderStyles.track}
+        onLayout={() => {
+          trackRef.current?.measure((_x, _y, width, _h, pageX) => {
+            trackWidth.current = width;
+            trackPageX.current = pageX;
+          });
+        }}
+        {...panResponder.panHandlers}
+      >
+        <View style={[sliderStyles.fill, { width: `${thumbPct * 100}%` }]} />
+        <View style={[sliderStyles.thumb, { left: `${thumbPct * 100}%` }]} />
+      </View>
+    </View>
+  );
+}
+
+const sliderStyles = StyleSheet.create({
+  track: {
+    height: 6, borderRadius: 3,
+    backgroundColor: COLORS.border,
+    marginHorizontal: 8, marginTop: 4,
+    justifyContent: 'center',
+  },
+  fill: {
+    position: 'absolute', left: 0, top: 0, bottom: 0,
+    borderRadius: 3, backgroundColor: COLORS.primary,
+  },
+  thumb: {
+    position: 'absolute',
+    width: 22, height: 22, borderRadius: 11,
+    backgroundColor: COLORS.primary,
+    marginLeft: -11,
+    alignItems: 'center', justifyContent: 'center',
+    top: -8,
+    shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3, shadowOffset: { width: 0, height: 1 },
+    elevation: 3,
+  },
+});
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   content: { padding: 16, paddingBottom: 40 },
@@ -473,8 +536,14 @@ const styles = StyleSheet.create({
     padding: 14, marginBottom: 12,
     borderWidth: 1, borderColor: COLORS.border,
   },
+  minCapCard: {
+    backgroundColor: COLORS.surface, borderRadius: 12,
+    padding: 14, marginBottom: 12,
+    borderWidth: 1, borderColor: COLORS.border,
+  },
   minScoreLeft: { flex: 1 },
-  minScoreTitle: { color: COLORS.text, fontWeight: '700', fontSize: 14 },
+  minScoreTitle: { color: COLORS.text, fontWeight: '700', fontSize: 14, marginBottom: 2 },
+  capValue: { color: COLORS.primary, fontWeight: '800', fontSize: 18 },
   minScoreDesc: { color: COLORS.textMuted, fontSize: 12, marginTop: 2 },
   stepper: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   stepperBtn: {

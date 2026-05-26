@@ -1,5 +1,5 @@
-import { Tabs, useRouter } from 'expo-router';
-import { Image, Text, TouchableOpacity, View } from 'react-native';
+import { Tabs } from 'expo-router';
+import { Image, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Line, Path, Polyline, Rect } from 'react-native-svg';
 import { COLORS } from '../../constants';
@@ -7,7 +7,6 @@ import { useSignalsStore } from '../../store/signalsStore';
 
 export default function TabLayout() {
   const { bottom } = useSafeAreaInsets();
-  const router = useRouter();
   const { buySignals, sellSignals } = useSignalsStore();
   const signalCount = buySignals().length + sellSignals().length;
 
@@ -44,19 +43,6 @@ export default function TabLayout() {
           ),
           tabBarIcon: ({ color }) => <SignalsIcon color={color} />,
           tabBarBadge: signalCount > 0 ? signalCount : undefined,
-          headerRight: () => (
-            <TouchableOpacity
-              onPress={() => router.push('/(tabs)/settings')}
-              style={{ marginRight: 16 }}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Svg width={20} height={20} viewBox="0 0 20 20" fill="none">
-                <Circle cx="10" cy="4" r="1.5" fill={COLORS.textSecondary} />
-                <Circle cx="10" cy="10" r="1.5" fill={COLORS.textSecondary} />
-                <Circle cx="10" cy="16" r="1.5" fill={COLORS.textSecondary} />
-              </Svg>
-            </TouchableOpacity>
-          ),
         }}
       />
       <Tabs.Screen
@@ -88,8 +74,7 @@ export default function TabLayout() {
         options={{
           title: 'Settings',
           tabBarLabel: 'Settings',
-          tabBarIcon: ({ color }) => <TabIcon symbol="⚙️" color={color} />,
-          href: null, // hide from tab bar
+          tabBarIcon: ({ color }) => <SettingsIcon color={color} />,
         }}
       />
     </Tabs>
@@ -137,8 +122,18 @@ function WatchlistIcon({ color }: { color: string }) {
   );
 }
 
-function TabIcon({ symbol, color }: { symbol: string; color: string }) {
-  return <Text style={{ fontSize: 20, opacity: color === COLORS.primary ? 1 : 0.5 }}>{symbol}</Text>;
+// Settings — gear
+function SettingsIcon({ color }: { color: string }) {
+  // Feather "settings" icon — centered at 12,12 in a 24×24 grid
+  return (
+    <Svg width={22} height={22} viewBox="0 0 24 24" fill="none">
+      <Circle cx="12" cy="12" r="3" stroke={color} strokeWidth="1.5" />
+      <Path
+        d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+        stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+      />
+    </Svg>
+  );
 }
 
 // Signals — bar chart with a small upward arrow
